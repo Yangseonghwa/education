@@ -1,27 +1,52 @@
+/**
+ * AI 자동 채점 (AI Auto-Grading for Google Classroom & Google Sheets)
+ *
+ * Google Drive의 Classroom 과제 폴더 내 Google Docs 제출물과 정답지(Google Docs)를 읽어
+ * OpenAI 호환(Chat Completions / Responses) 또는 Anthropic Claude(Messages) API로 자동 채점하고,
+ * 과목_과제별 결과 시트에 기록합니다.
+ */
+
 const APP = {
   queueSheet: 'AI채점_작업',
   submissionsSheet: 'AI채점_제출물',
   resultsSheet: 'AI채점_결과',
   settingsKey: 'AI_GRADING_SETTINGS',
+  queueIndexKey: 'AI_GRADING_QUEUE_INDEX',
+  jobPrefix: 'AI_GRADING_JOB_',
+  apiKeyProperty: 'OPENAI_COMPATIBLE_API_KEY',
+  legacyApiKeyProperty: 'XKIRO_API_KEY',
   triggerHandler: 'processQueue',
   providerCooldownProperty: 'AI_GRADING_PROVIDER_RETRY_AT',
   maxRuntimeMs: 330000,
   providerRetryDelayMs: 10 * 60 * 1000,
   maxProviderRetries: 5,
   retrySubmissionBatchSize: 13,
-  defaultMaxOutputTokens: 65536,
+  minOutputTokens: 1024,
+  defaultMaxOutputTokens: 16384,
   maxOutputTokens: 65536,
+  propertyChunkSize: 2500,
+  maxStoredDoneJobs: 30,
   models: [
     { id: 'gpt-4o-mini', label: 'gpt-4o-mini' }
   ]
 };
+
+/**
+ * 스프레드시트 열기 시 상단 메뉴에 'AI 자동 채점' 메뉴를 추가합니다.
+ */
 function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('AI 자동 채점')
     .addItem('채점 사이드바 열기', 'showSidebar')
+    .addItem('예약 큐 즉시 실행', 'runAllQueuedJobs')
+    .addSeparator()
+    .addItem('중단/오류 작업 초기화', 'resetStoppedJobsFromMenu')
     .addToUi();
 }
 
+/**
+ * 채점 사이드바를 표시합니다.
+ */
 function showSidebar() {
   setupSheets();
   const html = HtmlService.createHtmlOutputFromFile('sidebar')
@@ -29,8 +54,24 @@ function showSidebar() {
   SpreadsheetApp.getUi().showSidebar(html);
 }
 
+/**
+ * 메뉴에서 중단된 작업을 재대기 상태로 초기화합니다.
+ */
+function resetStoppedJobsFromMenu() {
+  const count = retryStoppedJobs();
+  SpreadsheetApp.getActive().toast(
+    count ? (count + '건의 중단된 작업을 재실행 대기 상태로 복구했습니다.') : '복구할 중단된 작업이 없습니다.',
+    'AI 자동 채점',
+    5
+  );
+}
+
+/**
+ * 레거시 큐/제출물 보조 시트가 존재하면 숨김 처리합니다.
+ */
 function setupSheets() {
   const spreadsheet = SpreadsheetApp.getActive();
+  if (!spreadsheet) return;
   [APP.queueSheet, APP.submissionsSheet].forEach(function(name) {
     const sheet = spreadsheet.getSheetByName(name);
     if (sheet && !sheet.isSheetHidden()) sheet.hideSheet();
@@ -42,51 +83,109 @@ function getQueuePropertyService_() {
 }
 
 function getQueueIndex_() {
-  const raw = getQueuePropertyService_().getProperty('AI_GRADING_QUEUE_INDEX');
+  const raw = getQueuePropertyService_().getProperty(APP.queueIndexKey);
   if (!raw) return [];
-  try { return JSON.parse(raw); } catch (ignored) { return []; }
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch (ignored) {
+    return [];
+  }
 }
 
 function loadJob_(jobId) {
+  if (!jobId) return null;
   const properties = getQueuePropertyService_();
-  const prefix = 'AI_GRADING_JOB_' + jobId + '_';
-  const count = Number(properties.getProperty(prefix + 'COUNT') || 0);
+  const allProps = properties.getProperties();
+  const prefix = APP.jobPrefix + jobId + '_';
+  const count = Number(allProps[prefix + 'COUNT'] || 0);
   if (!count) return null;
   let raw = '';
-  for (let index = 0; index < count; index += 1) raw += properties.getProperty(prefix + index) || '';
-  try { return JSON.parse(raw); } catch (error) { return null; }
+  for (let index = 0; index < count; index += 1) {
+    raw += allProps[prefix + index] || '';
+  }
+  try {
+    return JSON.parse(raw);
+  } catch (error) {
+    return null;
+  }
 }
 
 function loadJobs_() {
-  return getQueueIndex_().map(loadJob_).filter(function(job) { return job; });
+  const properties = getQueuePropertyService_();
+  const allProps = properties.getProperties();
+  const rawIndex = allProps[APP.queueIndexKey];
+  if (!rawIndex) return [];
+  let ids;
+  try {
+    ids = JSON.parse(rawIndex);
+  } catch (ignored) {
+    return [];
+  }
+  if (!Array.isArray(ids)) return [];
+  return ids.map(function(jobId) {
+    const prefix = APP.jobPrefix + jobId + '_';
+    const count = Number(allProps[prefix + 'COUNT'] || 0);
+    if (!count) return null;
+    let raw = '';
+    for (let index = 0; index < count; index += 1) {
+      raw += allProps[prefix + index] || '';
+    }
+    try {
+      return JSON.parse(raw);
+    } catch (error) {
+      return null;
+    }
+  }).filter(function(job) { return Boolean(job); });
 }
 
 function saveJob_(job) {
-  const properties = getQueuePropertyService_();
-  const prefix = 'AI_GRADING_JOB_' + job.jobId + '_';
-  const raw = JSON.stringify(job);
-  const chunkSize = 2500;
-  const oldCount = Number(properties.getProperty(prefix + 'COUNT') || 0);
-  const count = Math.ceil(raw.length / chunkSize) || 1;
-  for (let index = 0; index < count; index += 1) {
-    properties.setProperty(prefix + index, raw.slice(index * chunkSize, (index + 1) * chunkSize));
-  }
-  for (let index = count; index < oldCount; index += 1) properties.deleteProperty(prefix + index);
-  properties.setProperty(prefix + 'COUNT', String(count));
-  const ids = getQueueIndex_();
-  if (ids.indexOf(job.jobId) < 0) {
-    ids.push(job.jobId);
-    properties.setProperty('AI_GRADING_QUEUE_INDEX', JSON.stringify(ids));
+  if (!job || !job.jobId) throw new Error('유효하지 않은 작업 데이터입니다.');
+  const lock = LockService.getUserLock();
+  const locked = lock.tryLock(5000);
+  try {
+    const properties = getQueuePropertyService_();
+    const prefix = APP.jobPrefix + job.jobId + '_';
+    const raw = JSON.stringify(job);
+    const chunkSize = APP.propertyChunkSize;
+    const oldCount = Number(properties.getProperty(prefix + 'COUNT') || 0);
+    const count = Math.ceil(raw.length / chunkSize) || 1;
+    const batchProps = {};
+    for (let index = 0; index < count; index += 1) {
+      batchProps[prefix + index] = raw.slice(index * chunkSize, (index + 1) * chunkSize);
+    }
+    batchProps[prefix + 'COUNT'] = String(count);
+    const ids = getQueueIndex_();
+    if (ids.indexOf(job.jobId) < 0) {
+      ids.push(job.jobId);
+      batchProps[APP.queueIndexKey] = JSON.stringify(ids);
+    }
+    properties.setProperties(batchProps, false);
+    for (let index = count; index < oldCount; index += 1) {
+      properties.deleteProperty(prefix + index);
+    }
+  } finally {
+    if (locked) lock.releaseLock();
   }
 }
 
 function removeJob_(jobId) {
-  const properties = getQueuePropertyService_();
-  const prefix = 'AI_GRADING_JOB_' + jobId + '_';
-  const count = Number(properties.getProperty(prefix + 'COUNT') || 0);
-  for (let index = 0; index < count; index += 1) properties.deleteProperty(prefix + index);
-  properties.deleteProperty(prefix + 'COUNT');
-  properties.setProperty('AI_GRADING_QUEUE_INDEX', JSON.stringify(getQueueIndex_().filter(function(id) { return id !== jobId; })));
+  if (!jobId) return;
+  const lock = LockService.getUserLock();
+  const locked = lock.tryLock(5000);
+  try {
+    const properties = getQueuePropertyService_();
+    const prefix = APP.jobPrefix + jobId + '_';
+    const count = Number(properties.getProperty(prefix + 'COUNT') || 0);
+    for (let index = 0; index < count; index += 1) {
+      properties.deleteProperty(prefix + index);
+    }
+    properties.deleteProperty(prefix + 'COUNT');
+    const nextIds = getQueueIndex_().filter(function(id) { return id !== jobId; });
+    properties.setProperty(APP.queueIndexKey, JSON.stringify(nextIds));
+  } finally {
+    if (locked) lock.releaseLock();
+  }
 }
 
 function getInitialData() {
@@ -118,20 +217,30 @@ function getInitialData() {
 }
 
 function saveSettings(settings) {
+  const input = settings || {};
   const currentSettings = getSettings_();
   const normalized = {
-    baseUrl: normalizeBaseUrl_(settings.baseUrl),
-    apiFormat: normalizeApiFormat_(settings.apiFormat),
-    model: String(settings.model || '').trim() || currentSettings.model || APP.models[0].id,
-    gradingMode: settings.gradingMode === 'all' ? 'all' : 'quantitative',
-    maxScore: normalizeMaxScore_(settings.maxScore),
-    maxOutputTokens: normalizeOutputTokens_(settings.maxOutputTokens),
-    aiUseDetection: toBoolean_(settings.aiUseDetection)
+    baseUrl: normalizeBaseUrl_(input.baseUrl !== undefined ? input.baseUrl : currentSettings.baseUrl),
+    apiFormat: normalizeApiFormat_(input.apiFormat !== undefined ? input.apiFormat : currentSettings.apiFormat),
+    model: String(input.model || '').trim() || currentSettings.model || APP.models[0].id,
+    gradingMode: input.gradingMode === 'all' ? 'all' : 'quantitative',
+    maxScore: normalizeMaxScore_(input.maxScore !== undefined ? input.maxScore : currentSettings.maxScore),
+    maxOutputTokens: normalizeOutputTokens_(input.maxOutputTokens !== undefined ? input.maxOutputTokens : currentSettings.maxOutputTokens),
+    aiUseDetection: input.aiUseDetection === undefined ? currentSettings.aiUseDetection : toBoolean_(input.aiUseDetection)
   };
   const properties = PropertiesService.getUserProperties();
-  if (settings.apiKey && String(settings.apiKey).trim()) properties.setProperty('OPENAI_COMPATIBLE_API_KEY', String(settings.apiKey).trim());
-  PropertiesService.getUserProperties().setProperty(APP.settingsKey, JSON.stringify(normalized));
-  return { ok: true, hasApiKey: Boolean(getApiKey_()) };
+  if (input.apiKey && String(input.apiKey).trim()) {
+    properties.setProperty(APP.apiKeyProperty, String(input.apiKey).trim());
+  }
+  properties.setProperty(APP.settingsKey, JSON.stringify(normalized));
+  return { ok: true, hasApiKey: Boolean(getApiKey_()), settings: normalized };
+}
+
+function clearApiKey() {
+  const properties = PropertiesService.getUserProperties();
+  properties.deleteProperty(APP.apiKeyProperty);
+  properties.deleteProperty(APP.legacyApiKeyProperty);
+  return { ok: true, hasApiKey: false };
 }
 
 function listAvailableModels(baseUrl, apiFormat) {
@@ -148,7 +257,7 @@ function listAvailableModels(baseUrl, apiFormat) {
   const status = response.getResponseCode();
   const body = response.getContentText();
   if (status < 200 || status >= 300) {
-    throw new Error('모델 목록 조회 실패 (' + status + '). 모델 ID를 직접 입력할 수 있습니다. ' + body.slice(0, 300));
+    throw new Error('모델 목록 조회 실패 (' + status + '). 모델 ID를 직접 입력할 수 있습니다. ' + sanitizeErrorSnippet_(body, 300));
   }
   let parsed;
   try {
@@ -156,17 +265,22 @@ function listAvailableModels(baseUrl, apiFormat) {
   } catch (error) {
     throw new Error('모델 목록 응답을 JSON으로 읽을 수 없습니다. 모델 ID를 직접 입력해 주세요.');
   }
-  const models = (parsed.data || []).map(function(model) {
-    const id = String(model.id || '');
-    return id ? { id: id, label: String(model.display_name || model.name || id) } : null;
-  }).filter(function(model) { return model; });
+  const rawList = Array.isArray(parsed.data) ? parsed.data : (Array.isArray(parsed.models) ? parsed.models : []);
+  const models = rawList.map(function(model) {
+    const id = String((model && (model.id || model.name)) || '').replace(/^models\//, '');
+    return id ? { id: id, label: String(model.display_name || model.displayName || model.name || id) } : null;
+  }).filter(function(model) { return Boolean(model); });
   if (!models.length) throw new Error('사용 가능한 모델 목록이 비어 있습니다. 모델 ID를 직접 입력해 주세요.');
   return models.sort(function(a, b) { return a.id.localeCompare(b.id); });
 }
 
 function getApiKey_() {
   const properties = PropertiesService.getUserProperties();
-  return String(properties.getProperty('OPENAI_COMPATIBLE_API_KEY') || properties.getProperty('XKIRO_API_KEY') || '').trim();
+  return String(
+    properties.getProperty(APP.apiKeyProperty) ||
+    properties.getProperty(APP.legacyApiKeyProperty) ||
+    ''
+  ).trim();
 }
 
 function browseClassroomRootFolder_() {
@@ -176,7 +290,8 @@ function browseClassroomRootFolder_() {
       spaces: 'drive',
       pageSize: 100,
       fields: 'files(id,name,mimeType,driveId)',
-      includeItemsFromAllDrives: true
+      includeItemsFromAllDrives: true,
+      supportsAllDrives: true
     }) || {};
     if (response.files && response.files.length) return browseDriveFolder(response.files[0].id);
   } catch (ignored) {}
@@ -230,8 +345,13 @@ function browseDriveFolderWithAdvanced_(folderId) {
       files: contents.files
     };
   }
-  const metadata = Drive.Files.get(requestedId, { fields: 'id,name,mimeType,parents,driveId' });
-  if (metadata.mimeType !== 'application/vnd.google-apps.folder') throw new Error('선택한 Drive 항목이 폴더가 아닙니다.');
+  const metadata = Drive.Files.get(requestedId, {
+    fields: 'id,name,mimeType,parents,driveId',
+    supportsAllDrives: true
+  });
+  if (metadata.mimeType !== 'application/vnd.google-apps.folder') {
+    throw new Error('선택한 Drive 항목이 폴더가 아닙니다.');
+  }
   const driveId = metadata.driveId || '';
   const contents = listDriveChildren_(metadata.id, driveId);
   return {
@@ -285,16 +405,25 @@ function getDriveAppBreadcrumbs_(folder) {
 function normalizeDriveFolderId_(value) {
   const text = String(value || '').trim();
   if (!text) return 'root';
-  const match = text.match(/\/folders\/([^/?#]+)/);
-  return match ? match[1] : text;
+  const folderMatch = text.match(/\/folders\/([a-zA-Z0-9_-]+)/);
+  if (folderMatch) return folderMatch[1];
+  if (text === 'root') return 'root';
+  if (/^drive:[a-zA-Z0-9_-]+$/.test(text)) return text;
+  if (/^[a-zA-Z0-9_-]+$/.test(text)) return text;
+  throw new Error('유효하지 않은 Drive 폴더 ID 형식입니다.');
+}
+
+function escapeDriveQueryLiteral_(value) {
+  return String(value || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
 }
 
 function listDriveChildren_(parentId, driveId) {
   const entries = { folders: [], files: [] };
+  const safeParentId = escapeDriveQueryLiteral_(parentId);
   let pageToken;
   do {
     const params = {
-      q: "'" + parentId + "' in parents and trashed = false",
+      q: "'" + safeParentId + "' in parents and trashed = false",
       spaces: 'drive',
       pageSize: 1000,
       orderBy: 'name_natural',
@@ -349,33 +478,41 @@ function getDriveBreadcrumbs_(folder, driveId) {
       breadcrumbs.unshift({ id: 'root', name: '내 드라이브' });
       break;
     }
-    current = Drive.Files.get(parentId, { fields: 'id,name,mimeType,parents,driveId' });
+    current = Drive.Files.get(parentId, {
+      fields: 'id,name,mimeType,parents,driveId',
+      supportsAllDrives: true
+    });
     breadcrumbs.unshift({ id: current.id, name: current.name });
   }
   return breadcrumbs;
 }
 
 function createJobs(request) {
+  const req = request || {};
   if (!getApiKey_()) throw new Error('API 키를 먼저 저장해 주세요.');
-  if (!request.assignmentFolderId || request.assignmentFolderId === 'root') throw new Error('과제 폴더를 선택해 주세요.');
-  if (!request.answerKeyId) throw new Error('정답지 Google Docs를 선택해 주세요.');
+  if (!req.assignmentFolderId || req.assignmentFolderId === 'root') throw new Error('과제 폴더를 선택해 주세요.');
+  if (!req.answerKeyId) throw new Error('정답지 Google Docs를 선택해 주세요.');
 
   const settings = getSettings_();
-  const baseUrl = normalizeBaseUrl_(request.baseUrl || settings.baseUrl);
+  const baseUrl = normalizeBaseUrl_(req.baseUrl || settings.baseUrl);
   if (!baseUrl) throw new Error('API Base URL을 입력해 주세요.');
-  const apiFormat = normalizeApiFormat_(request.apiFormat || settings.apiFormat);
-  const answerKey = getDriveDocMeta_(request.answerKeyId);
-  const assignmentFolder = browseDriveFolder(request.assignmentFolderId);
-  const mode = request.gradingMode === 'all' ? 'all' : 'quantitative';
-  const maxScore = normalizeMaxScore_(request.maxScore || settings.maxScore);
-  const maxOutputTokens = normalizeOutputTokens_(request.maxOutputTokens || settings.maxOutputTokens);
-  const aiUseDetection = request.aiUseDetection === undefined
+  const apiFormat = normalizeApiFormat_(req.apiFormat || settings.apiFormat);
+  const answerKey = getDriveDocMeta_(req.answerKeyId);
+  const assignmentFolder = browseDriveFolder(req.assignmentFolderId);
+  const mode = req.gradingMode === 'all' ? 'all' : 'quantitative';
+  const maxScore = normalizeMaxScore_(req.maxScore || settings.maxScore);
+  const maxOutputTokens = normalizeOutputTokens_(req.maxOutputTokens || settings.maxOutputTokens);
+  const aiUseDetection = req.aiUseDetection === undefined
     ? settings.aiUseDetection
-    : toBoolean_(request.aiUseDetection);
-  const model = String(request.model || settings.model || APP.models[0].id);
-  const courseName = String(request.courseName || getClassFolderName_(assignmentFolder.breadcrumbs) || 'Classroom');
-  const assignmentTitle = String(request.assignmentFolderName || assignmentFolder.folderName || '과제');
-  const submissions = listFolderSubmissions_(request.assignmentFolderId);
+    : toBoolean_(req.aiUseDetection);
+  const model = String(req.model || settings.model || APP.models[0].id).trim() || APP.models[0].id;
+  const courseName = String(req.courseName || getClassFolderName_(assignmentFolder.breadcrumbs) || 'Classroom');
+  const assignmentTitle = String(req.assignmentFolderName || assignmentFolder.folderName || '과제');
+  const submissions = listFolderSubmissions_(assignmentFolder);
+
+  if (!submissions.length) {
+    throw new Error('선택한 과제 폴더(' + assignmentTitle + ')에 채점할 Google Docs 제출물이 없습니다.');
+  }
 
   const now = new Date();
   const jobId = Utilities.getUuid();
@@ -385,7 +522,7 @@ function createJobs(request) {
     scheduledAt: now.toISOString(),
     courseId: '',
     courseName: courseName,
-    assignmentFolderId: String(request.assignmentFolderId),
+    assignmentFolderId: String(req.assignmentFolderId),
     assignmentFolderName: assignmentTitle,
     courseworkId: '',
     assignmentTitle: assignmentTitle,
@@ -433,10 +570,10 @@ function getQueueStatus() {
   const jobs = loadJobs_().sort(function(a, b) {
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
-  jobs.filter(function(job) { return job.status === 'DONE'; }).slice(30).forEach(function(job) {
+  jobs.filter(function(job) { return job.status === 'DONE'; }).slice(APP.maxStoredDoneJobs).forEach(function(job) {
     removeJob_(job.jobId);
   });
-  return jobs.slice(0, 30).map(function(job) {
+  return jobs.slice(0, APP.maxStoredDoneJobs).map(function(job) {
     const submissions = job.submissions || [];
     const completed = submissions.filter(function(item) { return item.status === 'DONE' || item.status === 'ERROR'; }).length;
     const errors = submissions.filter(function(item) { return item.status === 'ERROR'; }).length;
@@ -460,12 +597,41 @@ function getQueueStatus() {
 function deleteQueuedJob(jobId) {
   const job = loadJob_(String(jobId || ''));
   if (!job) throw new Error('삭제할 예약 작업을 찾지 못했습니다.');
-  if (['WAITING', 'QUEUED', 'STOPPED'].indexOf(job.status) < 0) {
-    throw new Error('실행 대기 중인 작업만 삭제할 수 있습니다.');
+  if (['WAITING', 'QUEUED', 'STOPPED', 'DONE'].indexOf(job.status) < 0) {
+    throw new Error('채점 진행 중(RUNNING)이 아닌 작업만 삭제할 수 있습니다.');
   }
   removeJob_(job.jobId);
   if (!hasRunnableJobs_()) removeQueueTriggers_();
   return getQueueStatus();
+}
+
+function retryStoppedJobs() {
+  let resetJobsCount = 0;
+  loadJobs_().forEach(function(job) {
+    if (job.status !== 'STOPPED') return;
+    let resetCount = 0;
+    (job.submissions || []).forEach(function(item) {
+      if (item.status === 'ERROR' && item.docId) {
+        item.status = 'PENDING';
+        item.error = '';
+        item.updatedAt = new Date().toISOString();
+        resetCount += 1;
+      }
+    });
+    if (resetCount > 0 || (job.submissions || []).some(function(item) { return item.status === 'PENDING'; })) {
+      job.status = 'QUEUED';
+      job.scheduledAt = new Date().toISOString();
+      job.providerRetryCount = 0;
+      if (String(job.error || '').indexOf('JSON') >= 0) {
+        job.submissionBatchSize = APP.retrySubmissionBatchSize;
+      }
+      job.error = '중단된 작업을 재시도 대기열로 복구했습니다.';
+      job.updatedAt = new Date().toISOString();
+      saveJob_(job);
+      resetJobsCount += 1;
+    }
+  });
+  return resetJobsCount;
 }
 
 function runAllQueuedJobs() {
@@ -480,18 +646,23 @@ function runAllQueuedJobs() {
     if (job.status === 'STOPPED') {
       let resetCount = 0;
       (job.submissions || []).forEach(function(item) {
-        if (item.status === 'ERROR' && String(item.error || '').indexOf('API 응답이 유효한 JSON이 아닙니다') === 0) {
+        if (item.status === 'ERROR' && item.docId) {
           item.status = 'PENDING';
           item.error = '';
           item.updatedAt = new Date().toISOString();
           resetCount += 1;
         }
       });
-      if (resetCount) {
+      if (resetCount || (job.submissions || []).some(function(item) { return item.status === 'PENDING'; })) {
         job.status = 'QUEUED';
         job.scheduledAt = new Date().toISOString();
-        delete job.submissionBatchSize;
-        job.error = 'JSON 응답 오류 제출물을 작은 묶음으로 다시 채점합니다.';
+        job.providerRetryCount = 0;
+        if (String(job.error || '').indexOf('유효한 JSON이 아닙니다') >= 0) {
+          job.submissionBatchSize = APP.retrySubmissionBatchSize;
+          job.error = 'JSON 응답 오류 제출물을 작은 묶음(' + APP.retrySubmissionBatchSize + '명 이하)으로 다시 채점합니다.';
+        } else {
+          job.error = '중단된 작업을 다시 채점합니다.';
+        }
         job.updatedAt = new Date().toISOString();
         saveJob_(job);
       }
@@ -551,23 +722,87 @@ function processStoredJob_(job, startedAt) {
   job.status = 'RUNNING';
   job.error = '';
   saveJob_(job);
+
+  let answerKeyText = '';
   try {
-    const answerKeyText = extractGoogleDocText_(job.answerKeyId);
-    const documents = candidates.map(function(item) {
-      return {
+    answerKeyText = extractGoogleDocText_(job.answerKeyId);
+  } catch (docError) {
+    const msg = '정답지 문서를 열 수 없습니다: ' + String(docError.message || docError);
+    candidates.forEach(function(item) {
+      item.status = 'PENDING';
+      item.error = msg;
+      item.updatedAt = new Date().toISOString();
+    });
+    job.status = 'STOPPED';
+    job.error = msg;
+    job.updatedAt = new Date().toISOString();
+    saveJob_(job);
+    return;
+  }
+  if (!answerKeyText) {
+    const emptyKeyMsg = '정답지 문서 내용이 비어 있습니다. 정답지 Google Docs 내용을 확인해 주세요.';
+    candidates.forEach(function(item) {
+      item.status = 'PENDING';
+      item.error = emptyKeyMsg;
+      item.updatedAt = new Date().toISOString();
+    });
+    job.status = 'STOPPED';
+    job.error = emptyKeyMsg;
+    job.updatedAt = new Date().toISOString();
+    saveJob_(job);
+    return;
+  }
+
+  const validCandidates = [];
+  const documents = [];
+  for (let i = 0; i < candidates.length; i += 1) {
+    if (startedAt && Date.now() - startedAt > APP.maxRuntimeMs) {
+      candidates.slice(i).forEach(function(remaining) {
+        remaining.status = 'PENDING';
+        remaining.updatedAt = new Date().toISOString();
+      });
+      break;
+    }
+    const item = candidates[i];
+    try {
+      const text = extractGoogleDocText_(item.docId);
+      if (!text) {
+        item.status = 'ERROR';
+        item.error = '제출물 문서 내용이 비어 있습니다.';
+        item.updatedAt = new Date().toISOString();
+        continue;
+      }
+      validCandidates.push(item);
+      documents.push({
         submissionId: item.submissionId,
         studentName: item.studentName,
         documentName: item.docName,
-        text: extractGoogleDocText_(item.docId)
-      };
-    });
+        text: text
+      });
+    } catch (docErr) {
+      item.status = 'ERROR';
+      item.error = '제출물 문서를 읽을 수 없습니다(삭제 또는 권한 없음): ' + String(docErr.message || docErr);
+      item.updatedAt = new Date().toISOString();
+    }
+  }
+
+  if (!validCandidates.length) {
+    job.completed = submissions.filter(function(item) { return item.status === 'DONE' || item.status === 'ERROR'; }).length;
+    const stillPending = submissions.some(function(item) { return item.status === 'PENDING'; });
+    job.status = stillPending ? 'QUEUED' : 'DONE';
+    job.updatedAt = new Date().toISOString();
+    saveJob_(job);
+    return;
+  }
+
+  try {
     const response = gradeAssignmentWithApi_(job, answerKeyText, documents);
     const resultMap = {};
     (response.results || []).forEach(function(result) {
       if (result && result.submissionId) resultMap[String(result.submissionId)] = result;
     });
     const resultRows = [];
-    candidates.forEach(function(item) {
+    validCandidates.forEach(function(item) {
       const result = resultMap[String(item.submissionId)];
       item.updatedAt = new Date().toISOString();
       if (!result) {
@@ -599,21 +834,21 @@ function processStoredJob_(job, startedAt) {
     job.updatedAt = new Date().toISOString();
     saveJob_(job);
   } catch (error) {
-    candidates.forEach(function(item) {
+    validCandidates.forEach(function(item) {
       item.status = 'PENDING';
       item.error = String(error.message || error);
       item.updatedAt = new Date().toISOString();
     });
     const errorMessage = String(error.message || error);
     if (error && error.isInvalidJsonResponse) {
-      if (candidates.length > 1) {
-        job.submissionBatchSize = candidates.length > APP.retrySubmissionBatchSize
+      if (validCandidates.length > 1) {
+        job.submissionBatchSize = validCandidates.length > APP.retrySubmissionBatchSize
           ? APP.retrySubmissionBatchSize
-          : Math.max(1, Math.floor(candidates.length / 2));
+          : Math.max(1, Math.floor(validCandidates.length / 2));
         job.status = 'QUEUED';
         job.error = errorMessage + ' 요청 묶음을 ' + job.submissionBatchSize + '명으로 줄여 다시 시도합니다.';
       } else {
-        candidates.forEach(function(item) { item.status = 'ERROR'; });
+        validCandidates.forEach(function(item) { item.status = 'ERROR'; });
         job.completed = submissions.filter(function(item) { return item.status === 'DONE' || item.status === 'ERROR'; }).length;
         job.status = job.completed >= submissions.length ? 'DONE' : 'QUEUED';
         job.error = errorMessage + ' 해당 제출물만 오류 처리하고 나머지는 계속 채점합니다.';
@@ -625,7 +860,7 @@ function processStoredJob_(job, startedAt) {
     const isCreditExhausted = Boolean(error && error.isCreditExhausted);
     const shouldRetry = Boolean(error && error.isRetryableProviderError);
     if (isCreditExhausted) {
-      candidates.forEach(function(item) { item.status = 'ERROR'; });
+      validCandidates.forEach(function(item) { item.status = 'ERROR'; });
       job.status = 'STOPPED';
       job.error = errorMessage + ' 크레딧 부족 또는 소진으로 자동 재시도를 중단했습니다.';
     } else if (shouldRetry) {
@@ -641,19 +876,18 @@ function processStoredJob_(job, startedAt) {
         );
         job.error = errorMessage + ' 10분 후 자동 재시도합니다 (' + job.providerRetryCount + '/' + APP.maxProviderRetries + ').';
       } else {
-        candidates.forEach(function(item) { item.status = 'ERROR'; });
+        validCandidates.forEach(function(item) { item.status = 'ERROR'; });
         job.status = 'STOPPED';
         job.error = errorMessage + ' 재시도 ' + APP.maxProviderRetries + '회 한도에 도달해 중단했습니다.';
       }
     } else {
-      candidates.forEach(function(item) { item.status = 'ERROR'; });
+      validCandidates.forEach(function(item) { item.status = 'ERROR'; });
       job.status = 'STOPPED';
-      job.error = errorMessage + ' 자동 재시도하지 않습니다. 오류를 수정한 뒤 과제를 다시 등록해 주세요.';
+      job.error = errorMessage + ' 자동 재시도하지 않습니다. 설정 확인 후 [예약 큐 전체 실행]으로 재시도하세요.';
     }
     job.completed = submissions.filter(function(item) { return item.status === 'DONE' || item.status === 'ERROR'; }).length;
     job.updatedAt = new Date().toISOString();
     saveJob_(job);
-    return;
   }
 }
 
@@ -699,6 +933,13 @@ function writeResultRowsOnce_(sheet, rows) {
 function safeSheetText_(value) {
   const text = String(value == null ? '' : value);
   return /^[\s]*[=+\-@]/.test(text) ? "'" + text : text;
+}
+
+function sanitizeErrorSnippet_(body, maxLen) {
+  const limit = Number(maxLen) || 300;
+  return String(body || '')
+    .replace(/\b(sk-[A-Za-z0-9_\-]{10,}|AIza[0-9A-Za-z_\-]{20,}|Bearer\s+[A-Za-z0-9._\-]{10,})\b/gi, '[REDACTED]')
+    .slice(0, limit);
 }
 
 function recoverStoredJobs_() {
@@ -853,7 +1094,7 @@ function gradeAssignmentWithApi_(job, answerKeyText, documents) {
   const status = response.getResponseCode();
   const body = response.getContentText();
   if (status < 200 || status >= 300) {
-    const error = new Error('API 오류 (' + status + '): ' + body.slice(0, 500));
+    const error = new Error('API 오류 (' + status + '): ' + sanitizeErrorSnippet_(body, 500));
     error.isCreditExhausted = isCreditExhaustion_(status, body);
     error.isRetryableProviderError = !error.isCreditExhausted && isRetryableProviderStatus_(status);
     error.isPermanentProviderError = !error.isRetryableProviderError;
@@ -874,7 +1115,7 @@ function gradeAssignmentWithApi_(job, answerKeyText, documents) {
     throw error;
   }
   try {
-    return JSON.parse(stripJsonFence_(generatedText));
+    return parseGradingJson_(generatedText);
   } catch (parseError) {
     const error = new Error('API 응답이 유효한 JSON이 아닙니다 (응답 ' + generatedText.length + '자).');
     error.isInvalidJsonResponse = true;
@@ -900,11 +1141,13 @@ function extractProviderResponseText_(parsed, apiFormat) {
     : (parsed.content || []);
   return blocks.map(function(block) {
     return block && typeof block.text === 'string' ? block.text : '';
-  }).filter(function(text) { return text; }).join('').trim();
+  }).filter(function(text) { return Boolean(text); }).join('').trim();
 }
 
-function listFolderSubmissions_(folderId) {
-  const browser = browseDriveFolder(folderId);
+function listFolderSubmissions_(folderOrId) {
+  const browser = (folderOrId && typeof folderOrId === 'object' && Array.isArray(folderOrId.files))
+    ? folderOrId
+    : browseDriveFolder(folderOrId);
   return (browser.files || []).map(function(file) {
     return {
       submissionId: String(file.id),
@@ -930,9 +1173,22 @@ function extractGoogleDocText_(fileId) {
 }
 
 function getDriveDocMeta_(fileId) {
-  const file = DriveApp.getFileById(String(fileId));
-  if (file.getMimeType() !== 'application/vnd.google-apps.document') throw new Error('정답지는 Google Docs 파일이어야 합니다.');
-  return { id: file.getId(), name: file.getName() };
+  const id = String(fileId || '').trim();
+  if (!id) throw new Error('정답지 파일 ID가 비어 있습니다.');
+  try {
+    const meta = Drive.Files.get(id, { fields: 'id,name,mimeType', supportsAllDrives: true });
+    if (meta.mimeType !== 'application/vnd.google-apps.document') {
+      throw new Error('정답지는 Google Docs 파일이어야 합니다.');
+    }
+    return { id: meta.id, name: meta.name };
+  } catch (error) {
+    if (error && String(error.message || '').indexOf('Google Docs 파일이어야') >= 0) throw error;
+    const file = DriveApp.getFileById(id);
+    if (file.getMimeType() !== 'application/vnd.google-apps.document') {
+      throw new Error('정답지는 Google Docs 파일이어야 합니다.');
+    }
+    return { id: file.getId(), name: file.getName() };
+  }
 }
 
 function getAssignmentResultSheet_(job) {
@@ -963,8 +1219,8 @@ function getAssignmentResultSheet_(job) {
 }
 
 function sanitizeSheetName_(value) {
-  const sanitized = value.replace(/[\\/:?*\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
-  return (sanitized || 'AI채점_결과').slice(0, 100);
+  const sanitized = String(value || '').replace(/[\\/:?*\[\]]/g, ' ').replace(/\s+/g, ' ').trim();
+  return (sanitized || APP.resultsSheet).slice(0, 95);
 }
 
 function normalizeGrade_(result, job) {
@@ -972,13 +1228,15 @@ function normalizeGrade_(result, job) {
   const quantitativeScore = clamp_(Number(result.quantitativeScore) || 0, 0, maxScore);
   const qualitativeScore = job.gradingMode === 'all' ? clamp_(Number(result.qualitativeScore) || 0, 0, maxScore) : 0;
   let score = job.gradingMode === 'all' ? Number(result.finalScore) : quantitativeScore;
-  if (!isFinite(score)) score = job.gradingMode === 'all' ? qualitativeScore : quantitativeScore;
+  if (!isFinite(score)) score = job.gradingMode === 'all' ? (quantitativeScore + qualitativeScore) : quantitativeScore;
   return {
     score: round_(clamp_(score, 0, maxScore)),
     quantitativeScore: round_(quantitativeScore),
     qualitativeScore: round_(qualitativeScore),
     feedback: String(result.feedback || '').slice(0, 2000),
-    confidence: ['high', 'medium', 'low'].indexOf(String(result.confidence)) >= 0 ? String(result.confidence) : 'medium',
+    confidence: ['high', 'medium', 'low'].indexOf(String(result.confidence || '').toLowerCase()) >= 0
+      ? String(result.confidence).toLowerCase()
+      : 'medium',
     aiUseSuspicion: job.aiUseDetection ? normalizeSuspicionLevel_(result.aiUseSuspicion) : 'not_checked',
     aiUseSuspicionScore: job.aiUseDetection ? clamp_(Number(result.aiUseSuspicionScore) || 0, 0, 100) : 0,
     aiUseSuspicionReason: job.aiUseDetection ? String(result.aiUseSuspicionReason || '').slice(0, 1000) : '',
@@ -987,7 +1245,7 @@ function normalizeGrade_(result, job) {
 }
 
 function isRunnableJob_(job) {
-  if (['QUEUED', 'RUNNING'].indexOf(job.status) < 0) return false;
+  if (!job || ['QUEUED', 'RUNNING'].indexOf(job.status) < 0) return false;
   return !job.scheduledAt || new Date(job.scheduledAt).getTime() <= Date.now();
 }
 
@@ -1022,8 +1280,17 @@ function removeQueueTriggers_() {
 }
 
 function getSettings_() {
+  const defaults = {
+    baseUrl: '',
+    apiFormat: 'chat_completions',
+    model: APP.models[0].id,
+    gradingMode: 'quantitative',
+    maxScore: 100,
+    maxOutputTokens: APP.defaultMaxOutputTokens,
+    aiUseDetection: false
+  };
   const raw = PropertiesService.getUserProperties().getProperty(APP.settingsKey);
-  if (!raw) return { baseUrl: '', apiFormat: 'chat_completions', model: APP.models[0].id, gradingMode: 'quantitative', maxScore: 100, maxOutputTokens: APP.defaultMaxOutputTokens, aiUseDetection: false };
+  if (!raw) return defaults;
   try {
     const value = JSON.parse(raw);
     return {
@@ -1036,7 +1303,7 @@ function getSettings_() {
       aiUseDetection: toBoolean_(value.aiUseDetection)
     };
   } catch (ignored) {
-    return { baseUrl: '', apiFormat: 'chat_completions', model: APP.models[0].id, gradingMode: 'quantitative', maxScore: 100, maxOutputTokens: APP.defaultMaxOutputTokens, aiUseDetection: false };
+    return defaults;
   }
 }
 
@@ -1062,7 +1329,7 @@ function normalizeMaxScore_(value) {
 
 function normalizeOutputTokens_(value) {
   const tokens = Number(value);
-  if (!isFinite(tokens) || tokens < 8192) return APP.defaultMaxOutputTokens;
+  if (!isFinite(tokens) || tokens < APP.minOutputTokens) return APP.defaultMaxOutputTokens;
   return Math.min(Math.floor(tokens), APP.maxOutputTokens);
 }
 
@@ -1080,24 +1347,42 @@ function toBoolean_(value) {
   return value === true || value === 'true' || value === 1 || value === '1';
 }
 
-function normalizeSchedule_(value) {
-  if (!value) return null;
-  const date = new Date(value);
-  return isNaN(date.getTime()) ? null : date;
-}
-
-function formatCourseworkDueDate_(item) {
-  if (!item.dueDate) return '';
-  const date = new Date(item.dueDate.year, item.dueDate.month - 1, item.dueDate.day, item.dueTime ? item.dueTime.hours || 0 : 0, item.dueTime ? item.dueTime.minutes || 0 : 0);
-  return Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm');
-}
-
 function toIso_(value) {
   if (!value) return '';
   const date = new Date(value);
   return isNaN(date.getTime()) ? String(value) : date.toISOString();
 }
 
-function round_(value) { return Math.round(value * 100) / 100; }
-function clamp_(value, min, max) { return Math.max(min, Math.min(max, value)); }
-function stripJsonFence_(text) { return text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim(); }
+function round_(value) {
+  return Math.round(value * 100) / 100;
+}
+
+function clamp_(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function stripJsonFence_(text) {
+  const cleaned = String(text || '').trim();
+  const fenced = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenced && fenced[1]) return fenced[1].trim();
+  return cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+}
+
+function parseGradingJson_(text) {
+  const stripped = stripJsonFence_(text);
+  try {
+    const direct = JSON.parse(stripped);
+    if (Array.isArray(direct)) return { results: direct };
+    if (direct && typeof direct === 'object') return direct;
+  } catch (firstError) {
+    const startObj = stripped.indexOf('{');
+    const endObj = stripped.lastIndexOf('}');
+    if (startObj >= 0 && endObj > startObj) {
+      const candidate = stripped.slice(startObj, endObj + 1);
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object') return parsed;
+    }
+    throw firstError;
+  }
+  throw new Error('유효한 JSON 객체가 아닙니다.');
+}
