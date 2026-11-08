@@ -4,13 +4,21 @@
  * Google Drive의 Classroom 과제 폴더 내 Google Docs 제출물과 정답지(Google Docs)를 읽어
  * OpenAI 호환(Chat Completions / Responses), Anthropic Claude(Messages),
  * 또는 Google(Gemini)(Generative Language API / OpenAI 호환) API로 자동 채점하고,
- * 과목_과제별 결과 시트에 기록합니다.
+ * 과제_모델_채점일시별 개별 결과 시트에 기록합니다.
  */
 
 const APP = {
+  configSheet: 'AI채점_설정',
+  configSheetAliases: ['AI채점_설정', '설정', 'API설정', 'API_설정', 'Config'],
+  configHeaders: ['프리셋 이름', 'API 규격', 'Base URL', 'API Key', '기본 모델', '비고'],
   queueSheet: 'AI채점_작업',
   submissionsSheet: 'AI채점_제출물',
   resultsSheet: 'AI채점_결과',
+  resultHeaders: [
+    '학생명', '점수', '만점', 'AI 의심', 'AI 의심 점수', '정성점수', '피드백', '신뢰도',
+    '채점일시', '클래스', '과제', '학생ID', '학생 답안', '정답지', 'AI 의심 이유',
+    'AI 의심 근거', '작업ID'
+  ],
   settingsKey: 'AI_GRADING_SETTINGS',
   queueIndexKey: 'AI_GRADING_QUEUE_INDEX',
   jobPrefix: 'AI_GRADING_JOB_',
@@ -18,6 +26,7 @@ const APP = {
   legacyApiKeyProperty: 'XKIRO_API_KEY',
   triggerHandler: 'processQueue',
   providerCooldownProperty: 'AI_GRADING_PROVIDER_RETRY_AT',
+  timeZone: 'Asia/Seoul',
   maxRuntimeMs: 330000,
   providerRetryDelayMs: 10 * 60 * 1000,
   maxProviderRetries: 5,
@@ -44,8 +53,10 @@ function onOpen() {
     .createMenu('AI 자동 채점')
     .addItem('채점 사이드바 열기', 'showSidebar')
     .addItem('예약 큐 즉시 실행', 'runAllQueuedJobs')
+    .addItem('설정 시트 열기/생성', 'openConfigSheetFromMenu')
     .addSeparator()
     .addItem('중단/오류 작업 초기화', 'resetStoppedJobsFromMenu')
+    .addItem('완료/실패 작업 일괄 삭제', 'clearFinishedJobsFromMenu')
     .addToUi();
 }
 
@@ -57,6 +68,18 @@ function showSidebar() {
   const html = HtmlService.createHtmlOutputFromFile('sidebar')
     .setTitle('AI 자동 채점');
   SpreadsheetApp.getUi().showSidebar(html);
+}
+
+/**
+ * 상단 메뉴에서 설정 시트를 생성하거나 활성화합니다.
+ */
+function openConfigSheetFromMenu() {
+  openConfigSheet();
+  SpreadsheetApp.getActive().toast(
+    '프리셋 설정 시트(' + APP.configSheet + ')를 열었습니다. URL과 API Key를 입력한 뒤 사이드바에서 선택하세요.',
+    'AI 자동 채점',
+    5
+  );
 }
 
 /**
@@ -72,7 +95,20 @@ function resetStoppedJobsFromMenu() {
 }
 
 /**
- * 레거시 큐/제출물 보조 시트가 존재하면 숨김 처리합니다.
+ * 메뉴에서 완료/실패 작업을 일괄 삭제합니다.
+ */
+function clearFinishedJobsFromMenu() {
+  const res = clearFinishedJobs();
+  const count = res && typeof res.deletedCount === 'number' ? res.deletedCount : 0;
+  SpreadsheetApp.getActive().toast(
+    count ? (count + '건의 완료/실패 작업을 목록에서 삭제했습니다.') : '삭제할 완료/실패 작업이 없습니다.',
+    'AI 자동 채점',
+    5
+  );
+}
+
+/**
+ * 레거시 큐/제출물 보조 시트가 존재하면 숨김 처리하고 설정 시트를 준비합니다.
  */
 function setupSheets() {
   const spreadsheet = SpreadsheetApp.getActive();
@@ -81,14 +117,241 @@ function setupSheets() {
     const sheet = spreadsheet.getSheetByName(name);
     if (sheet && !sheet.isSheetHidden()) sheet.hideSheet();
   });
+  ensureConfigSheet_(spreadsheet, true);
+}
+
+/**
+ * 스프레드시트 내 설정 시트(AI채점_설정 등)를 찾거나 필요 시 생성합니다.
+ */
+function ensureConfigSheet_(spreadsheet, createIfMissing) {
+  const book = spreadsheet || SpreadsheetApp.getActive();
+  if (!book) return null;
+  const aliases = APP.configSheetAliases || [APP.configSheet];
+  for (let i = 0; i < aliases.length; i += 1) {
+    const existing = book.getSheetByName(aliases[i]);
+    if (existing) {
+      if (existing.getLastRow() === 0) {
+        initializeConfigSheetTemplate_(existing);
+      }
+      return existing;
+    }
+  }
+  if (!createIfMissing) return null;
+  const created = book.insertSheet(APP.configSheet);
+  initializeConfigSheetTemplate_(created);
+  return created;
+}
+
+function initializeConfigSheetTemplate_(sheet) {
+  if (!sheet) return;
+  const headers = APP.configHeaders;
+  sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  const sampleRows = [
+    ['OpenAI 기본', 'chat_completions', 'https://api.openai.com/v1', '', 'gpt-4o-mini', 'OpenAI 공식 API'],
+    ['Google Gemini', 'gemini', 'https://generativelanguage.googleapis.com/v1beta', '', 'gemini-2.5-flash', 'Google AI Studio API'],
+    ['Anthropic Claude', 'claude', 'https://api.anthropic.com/v1', '', 'claude-3-5-sonnet-latest', 'Anthropic 공식 API']
+  ];
+  sheet.getRange(2, 1, sampleRows.length, headers.length).setValues(sampleRows);
+}
+
+/**
+ * 설정 시트를 생성/표시하고 활성화한 뒤 프리셋 목록을 반환합니다.
+ */
+function openConfigSheet() {
+  const spreadsheet = SpreadsheetApp.getActive();
+  if (!spreadsheet) throw new Error('활성 스프레드시트를 찾을 수 없습니다.');
+  const sheet = ensureConfigSheet_(spreadsheet, true);
+  if (sheet.isSheetHidden && sheet.isSheetHidden()) sheet.showSheet();
+  if (spreadsheet.setActiveSheet) spreadsheet.setActiveSheet(sheet);
+  return {
+    sheetName: sheet.getName(),
+    presets: listConfigPresets(false)
+  };
+}
+
+/**
+ * 설정 시트에서 프리셋 목록을 읽어 반환합니다 (클라이언트 전송용: 원본 API Key는 마스킹 처리).
+ */
+function listConfigPresets(createIfMissing) {
+  return readConfigPresetsFromSheet_(Boolean(createIfMissing)).map(sanitizePresetForClient_);
+}
+
+function sanitizePresetForClient_(preset) {
+  return {
+    id: preset.id,
+    name: preset.name,
+    apiFormat: preset.apiFormat,
+    baseUrl: preset.baseUrl,
+    defaultModel: preset.defaultModel || '',
+    hasApiKey: Boolean(preset.apiKey),
+    maskedApiKey: maskApiKey_(preset.apiKey),
+    note: preset.note || '',
+    sheetName: preset.sheetName || APP.configSheet,
+    rowNumber: preset.rowNumber || 0
+  };
+}
+
+function maskApiKey_(key) {
+  const raw = String(key || '').trim();
+  if (!raw) return '';
+  if (raw.length <= 8) return '****';
+  return raw.slice(0, 4) + '...' + raw.slice(-4);
+}
+
+function inferApiFormatFromPreset_(rawFormat, baseUrl, presetName) {
+  const fmt = String(rawFormat || '').trim().toLowerCase();
+  if (fmt === 'gemini' || fmt === 'google' || fmt.indexOf('gemini') >= 0 || fmt.indexOf('google') >= 0) return 'gemini';
+  if (fmt === 'claude' || fmt === 'anthropic' || fmt.indexOf('claude') >= 0) return 'claude';
+  if (fmt === 'responses' || fmt.indexOf('response') >= 0) return 'responses';
+  if (fmt === 'chat_completions' || fmt === 'openai' || fmt.indexOf('chat') >= 0) return 'chat_completions';
+
+  const url = String(baseUrl || '').trim().toLowerCase();
+  if (url.indexOf('generativelanguage.googleapis.com') >= 0) return 'gemini';
+  if (url.indexOf('anthropic.com') >= 0) return 'claude';
+  if (/\/responses$/i.test(url)) return 'responses';
+
+  const name = String(presetName || '').trim().toLowerCase();
+  if (name.indexOf('gemini') >= 0 || name.indexOf('google') >= 0 || name.indexOf('제미나이') >= 0) return 'gemini';
+  if (name.indexOf('claude') >= 0 || name.indexOf('anthropic') >= 0 || name.indexOf('클로드') >= 0) return 'claude';
+  if (name.indexOf('responses') >= 0) return 'responses';
+
+  return 'chat_completions';
+}
+
+function readConfigPresetsFromSheet_(createIfMissing) {
+  const spreadsheet = SpreadsheetApp.getActive();
+  if (!spreadsheet) return [];
+  const sheet = ensureConfigSheet_(spreadsheet, Boolean(createIfMissing));
+  if (!sheet) return [];
+  const lastRow = sheet.getLastRow();
+  const lastCol = Math.max(sheet.getLastColumn(), 6);
+  if (lastRow < 1) return [];
+  const values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
+  if (!values.length) return [];
+
+  const firstRow = values[0].map(function(cell) { return String(cell || '').trim().toLowerCase(); });
+  const hasHeader = firstRow.some(function(cell) {
+    return /프리셋|이름|name|규격|format|provider|url|endpoint|엔드포인트|key|키|모델|model/.test(cell);
+  });
+
+  const colMap = { name: 0, apiFormat: 1, baseUrl: 2, apiKey: 3, defaultModel: 4, note: 5 };
+  if (hasHeader) {
+    firstRow.forEach(function(headerText, idx) {
+      if (!headerText) return;
+      if (/프리셋|이름|name|별칭|title/.test(headerText)) colMap.name = idx;
+      else if (/규격|format|provider|제공자|유형/.test(headerText)) colMap.apiFormat = idx;
+      else if (/url|endpoint|엔드포인트|주소/.test(headerText)) colMap.baseUrl = idx;
+      else if (/key|키|시크릿|secret|token/.test(headerText)) colMap.apiKey = idx;
+      else if (/모델|model/.test(headerText)) colMap.defaultModel = idx;
+      else if (/비고|메모|note|설명|description/.test(headerText)) colMap.note = idx;
+    });
+  }
+
+  const startRowIndex = hasHeader ? 1 : 0;
+  const presets = [];
+  const sheetName = sheet.getName();
+
+  for (let r = startRowIndex; r < values.length; r += 1) {
+    const row = values[r];
+    const rawName = String(row[colMap.name] !== undefined ? row[colMap.name] : '').trim();
+    const rawFormat = String(row[colMap.apiFormat] !== undefined ? row[colMap.apiFormat] : '').trim();
+    const rawUrl = String(row[colMap.baseUrl] !== undefined ? row[colMap.baseUrl] : '').trim();
+    const rawKey = String(row[colMap.apiKey] !== undefined ? row[colMap.apiKey] : '').trim();
+    const rawModel = String(row[colMap.defaultModel] !== undefined ? row[colMap.defaultModel] : '').trim();
+    const rawNote = String(row[colMap.note] !== undefined ? row[colMap.note] : '').trim();
+
+    if (!rawName && !rawUrl && !rawKey && !rawModel) continue;
+
+    const apiFormat = inferApiFormatFromPreset_(rawFormat, rawUrl, rawName);
+    const baseUrl = resolveBaseUrl_(rawUrl, apiFormat);
+    const rowNumber = r + 1;
+    const presetName = rawName || (apiFormat.toUpperCase() + ' 프리셋 #' + rowNumber);
+
+    presets.push({
+      id: 'preset_row_' + rowNumber,
+      name: presetName,
+      apiFormat: apiFormat,
+      baseUrl: baseUrl,
+      apiKey: rawKey,
+      defaultModel: rawModel,
+      note: rawNote,
+      sheetName: sheetName,
+      rowNumber: rowNumber
+    });
+  }
+  return presets;
+}
+
+function findConfigPreset_(presetId) {
+  const target = String(presetId || '').trim();
+  if (!target) return null;
+  const presets = readConfigPresetsFromSheet_(false);
+  for (let i = 0; i < presets.length; i += 1) {
+    if (presets[i].id === target || presets[i].name === target) return presets[i];
+  }
+  return null;
+}
+
+/**
+ * 선택한 설정 시트 프리셋(URL 엔드포인트, API 규격, API Key, 기본 모델)을 적용하고 모델 목록을 조회합니다.
+ */
+function applyConfigPreset(presetId) {
+  const preset = findConfigPreset_(presetId);
+  if (!preset) {
+    throw new Error('선택한 프리셋을 설정 시트에서 찾을 수 없습니다. [새로고침]을 눌러 주세요.');
+  }
+  const currentSettings = getSettings_();
+  const updatedSettings = {
+    baseUrl: preset.baseUrl || resolveBaseUrl_('', preset.apiFormat),
+    apiFormat: preset.apiFormat,
+    model: preset.defaultModel || currentSettings.model || '',
+    gradingMode: currentSettings.gradingMode,
+    maxScore: currentSettings.maxScore,
+    maxOutputTokens: currentSettings.maxOutputTokens,
+    aiUseDetection: currentSettings.aiUseDetection,
+    activePresetId: preset.id,
+    activePresetName: preset.name
+  };
+  const properties = PropertiesService.getUserProperties();
+  if (preset.apiKey) {
+    properties.setProperty(APP.apiKeyProperty, preset.apiKey);
+  }
+  properties.setProperty(APP.settingsKey, JSON.stringify(updatedSettings));
+
+  const effectiveKey = preset.apiKey || getApiKey_();
+  let models = [];
+  let modelWarning = '';
+  if (effectiveKey) {
+    try {
+      models = listAvailableModels(updatedSettings.baseUrl, updatedSettings.apiFormat, effectiveKey);
+      if (!preset.defaultModel && models.length && (!updatedSettings.model || !models.some(function(m) { return m.id === updatedSettings.model; }))) {
+        updatedSettings.model = models[0].id;
+        properties.setProperty(APP.settingsKey, JSON.stringify(updatedSettings));
+      }
+    } catch (err) {
+      modelWarning = String(err.message || err);
+    }
+  }
+
+  return {
+    ok: true,
+    hasApiKey: Boolean(effectiveKey),
+    settings: updatedSettings,
+    preset: sanitizePresetForClient_(preset),
+    models: models,
+    modelWarning: modelWarning
+  };
 }
 
 function getQueuePropertyService_() {
   return PropertiesService.getUserProperties();
 }
 
-function getQueueIndex_() {
-  const raw = getQueuePropertyService_().getProperty(APP.queueIndexKey);
+function getQueueIndex_(allProps) {
+  const raw = allProps
+    ? allProps[APP.queueIndexKey]
+    : getQueuePropertyService_().getProperty(APP.queueIndexKey);
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -98,50 +361,38 @@ function getQueueIndex_() {
   }
 }
 
-function loadJob_(jobId) {
-  if (!jobId) return null;
-  const properties = getQueuePropertyService_();
-  const allProps = properties.getProperties();
+function parseJobFromProps_(allProps, jobId) {
+  if (!jobId || !allProps) return null;
   const prefix = APP.jobPrefix + jobId + '_';
   const count = Number(allProps[prefix + 'COUNT'] || 0);
   if (!count) return null;
-  let raw = '';
+  const chunks = [];
   for (let index = 0; index < count; index += 1) {
-    raw += allProps[prefix + index] || '';
+    chunks.push(allProps[prefix + index] || '');
   }
   try {
-    return JSON.parse(raw);
+    return JSON.parse(chunks.join(''));
   } catch (error) {
     return null;
   }
 }
 
+function loadJob_(jobId) {
+  if (!jobId) return null;
+  const allProps = getQueuePropertyService_().getProperties();
+  return parseJobFromProps_(allProps, jobId);
+}
+
 function loadJobs_() {
-  const properties = getQueuePropertyService_();
-  const allProps = properties.getProperties();
-  const rawIndex = allProps[APP.queueIndexKey];
-  if (!rawIndex) return [];
-  let ids;
-  try {
-    ids = JSON.parse(rawIndex);
-  } catch (ignored) {
-    return [];
+  const allProps = getQueuePropertyService_().getProperties();
+  const ids = getQueueIndex_(allProps);
+  if (!ids.length) return [];
+  const jobs = [];
+  for (let i = 0; i < ids.length; i += 1) {
+    const job = parseJobFromProps_(allProps, ids[i]);
+    if (job) jobs.push(job);
   }
-  if (!Array.isArray(ids)) return [];
-  return ids.map(function(jobId) {
-    const prefix = APP.jobPrefix + jobId + '_';
-    const count = Number(allProps[prefix + 'COUNT'] || 0);
-    if (!count) return null;
-    let raw = '';
-    for (let index = 0; index < count; index += 1) {
-      raw += allProps[prefix + index] || '';
-    }
-    try {
-      return JSON.parse(raw);
-    } catch (error) {
-      return null;
-    }
-  }).filter(function(job) { return Boolean(job); });
+  return jobs;
 }
 
 function saveJob_(job) {
@@ -175,19 +426,35 @@ function saveJob_(job) {
 }
 
 function removeJob_(jobId) {
-  if (!jobId) return;
+  if (!jobId) return 0;
+  return removeJobs_([String(jobId)]);
+}
+
+function removeJobs_(jobIds) {
+  const targetList = (Array.isArray(jobIds) ? jobIds : []).map(String).filter(Boolean);
+  if (!targetList.length) return 0;
+  const targetSet = {};
+  targetList.forEach(function(id) { targetSet[id] = true; });
+
   const lock = LockService.getUserLock();
   const locked = lock.tryLock(5000);
   try {
     const properties = getQueuePropertyService_();
-    const prefix = APP.jobPrefix + jobId + '_';
-    const count = Number(properties.getProperty(prefix + 'COUNT') || 0);
-    for (let index = 0; index < count; index += 1) {
-      properties.deleteProperty(prefix + index);
-    }
-    properties.deleteProperty(prefix + 'COUNT');
-    const nextIds = getQueueIndex_().filter(function(id) { return id !== jobId; });
+    const allProps = properties.getProperties();
+    targetList.forEach(function(jobId) {
+      const prefix = APP.jobPrefix + jobId + '_';
+      const count = Number(allProps[prefix + 'COUNT'] || 0);
+      for (let index = 0; index < count; index += 1) {
+        properties.deleteProperty(prefix + index);
+      }
+      if (allProps[prefix + 'COUNT'] !== undefined) {
+        properties.deleteProperty(prefix + 'COUNT');
+      }
+    });
+    const currentIds = getQueueIndex_(allProps);
+    const nextIds = currentIds.filter(function(id) { return !targetSet[id]; });
     properties.setProperty(APP.queueIndexKey, JSON.stringify(nextIds));
+    return targetList.length;
   } finally {
     if (locked) lock.releaseLock();
   }
@@ -196,7 +463,15 @@ function removeJob_(jobId) {
 function getInitialData() {
   setupSheets();
   const settings = getSettings_();
-  const apiKey = getApiKey_();
+  const presets = listConfigPresets(false);
+  let apiKey = getApiKey_();
+  if (!apiKey && settings.activePresetId) {
+    const matchedPreset = findConfigPreset_(settings.activePresetId);
+    if (matchedPreset && matchedPreset.apiKey) {
+      apiKey = matchedPreset.apiKey;
+      PropertiesService.getUserProperties().setProperty(APP.apiKeyProperty, apiKey);
+    }
+  }
   const errors = [];
   let dynamicModels = [];
   let classroomBrowser = { folderId: '', folderName: 'Classroom', breadcrumbs: [], folders: [], files: [] };
@@ -221,6 +496,7 @@ function getInitialData() {
   return {
     hasApiKey: Boolean(apiKey),
     settings: settings,
+    presets: presets,
     models: dynamicModels,
     classroomBrowser: classroomBrowser,
     answerKeyBrowser: answerKeyBrowser,
@@ -232,20 +508,33 @@ function getInitialData() {
 function saveSettings(settings) {
   const input = settings || {};
   const currentSettings = getSettings_();
-  const apiFormat = normalizeApiFormat_(input.apiFormat !== undefined ? input.apiFormat : currentSettings.apiFormat);
-  const rawBaseUrl = input.baseUrl !== undefined ? input.baseUrl : currentSettings.baseUrl;
+  let preset = null;
+  if (input.presetId) {
+    preset = findConfigPreset_(input.presetId);
+  }
+  const apiFormat = normalizeApiFormat_(
+    input.apiFormat !== undefined
+      ? input.apiFormat
+      : (preset ? preset.apiFormat : currentSettings.apiFormat)
+  );
+  const rawBaseUrl = input.baseUrl !== undefined
+    ? input.baseUrl
+    : (preset ? preset.baseUrl : currentSettings.baseUrl);
   const normalized = {
     baseUrl: resolveBaseUrl_(rawBaseUrl, apiFormat),
     apiFormat: apiFormat,
-    model: String(input.model || '').trim() || currentSettings.model || '',
+    model: String(input.model || (preset && preset.defaultModel) || '').trim() || currentSettings.model || '',
     gradingMode: input.gradingMode === 'all' ? 'all' : 'quantitative',
     maxScore: normalizeMaxScore_(input.maxScore !== undefined ? input.maxScore : currentSettings.maxScore),
     maxOutputTokens: normalizeOutputTokens_(input.maxOutputTokens !== undefined ? input.maxOutputTokens : currentSettings.maxOutputTokens),
-    aiUseDetection: input.aiUseDetection === undefined ? currentSettings.aiUseDetection : toBoolean_(input.aiUseDetection)
+    aiUseDetection: input.aiUseDetection === undefined ? currentSettings.aiUseDetection : toBoolean_(input.aiUseDetection),
+    activePresetId: input.presetId !== undefined ? String(input.presetId || '') : (currentSettings.activePresetId || ''),
+    activePresetName: preset ? preset.name : (input.presetId === '' ? '' : (currentSettings.activePresetName || ''))
   };
   const properties = PropertiesService.getUserProperties();
-  if (input.apiKey && String(input.apiKey).trim()) {
-    properties.setProperty(APP.apiKeyProperty, String(input.apiKey).trim());
+  const keyToSave = String(input.apiKey || '').trim() || (preset && preset.apiKey ? String(preset.apiKey).trim() : '');
+  if (keyToSave) {
+    properties.setProperty(APP.apiKeyProperty, keyToSave);
   }
   properties.setProperty(APP.settingsKey, JSON.stringify(normalized));
   return { ok: true, hasApiKey: Boolean(getApiKey_()), settings: normalized };
@@ -259,23 +548,25 @@ function clearApiKey() {
 }
 
 /**
- * 입력된 API 키(또는 저장된 API 키)로 선택된 API 규격의 사용 가능한 모델 목록을 동적으로 조회합니다.
+ * 입력된 API 키(또는 선택된 프리셋/저장된 API 키)로 선택된 API 규격의 사용 가능한 모델 목록을 동적으로 조회합니다.
  * @param {string=} baseUrl
  * @param {string=} apiFormat
  * @param {string=} apiKeyInput 사이드바 입력창에 입력된 API 키(미저장 상태에서도 즉시 조회 지원)
+ * @param {string=} presetId 설정 시트 프리셋 ID(선택된 경우 프리셋의 API 키/URL 활용)
  */
-function listAvailableModels(baseUrl, apiFormat, apiKeyInput) {
+function listAvailableModels(baseUrl, apiFormat, apiKeyInput, presetId) {
   const settings = getSettings_();
-  const selectedFormat = normalizeApiFormat_(apiFormat || settings.apiFormat);
-  const enteredKey = String(apiKeyInput || '').trim();
+  const preset = presetId ? findConfigPreset_(presetId) : null;
+  const selectedFormat = normalizeApiFormat_(apiFormat || (preset && preset.apiFormat) || settings.apiFormat);
+  const enteredKey = String(apiKeyInput || '').trim() || (preset && preset.apiKey ? String(preset.apiKey).trim() : '');
   const apiKey = enteredKey || getApiKey_();
   if (!apiKey) {
-    throw new Error('API 키를 입력하거나 먼저 저장해 주세요.');
+    throw new Error('API 키를 입력하거나 설정 시트 프리셋을 선택해 주세요.');
   }
   if (enteredKey) {
     PropertiesService.getUserProperties().setProperty(APP.apiKeyProperty, enteredKey);
   }
-  const effectiveBaseUrl = resolveBaseUrl_(baseUrl || settings.baseUrl, selectedFormat);
+  const effectiveBaseUrl = resolveBaseUrl_(baseUrl || (preset && preset.baseUrl) || settings.baseUrl, selectedFormat);
   const modelsUrl = getModelsUrl_(effectiveBaseUrl, selectedFormat);
   const response = UrlFetchApp.fetch(modelsUrl, {
     method: 'get',
@@ -326,7 +617,11 @@ function parseModelsResponse_(parsed, apiFormat) {
   return models.sort(function(a, b) { return a.id.localeCompare(b.id); });
 }
 
-function getApiKey_() {
+function getApiKey_(presetId) {
+  if (presetId) {
+    const preset = findConfigPreset_(presetId);
+    if (preset && preset.apiKey) return String(preset.apiKey).trim();
+  }
   const properties = PropertiesService.getUserProperties();
   return String(
     properties.getProperty(APP.apiKeyProperty) ||
@@ -539,20 +834,154 @@ function getDriveBreadcrumbs_(folder, driveId) {
   return breadcrumbs;
 }
 
+/**
+ * 제출물 파일명에서 과제명 접두사/접미사, 클래스명, 확장자, '의 사본' 등 불필요한 텍스트를 제거하고 순수 학생 이름만 추출합니다.
+ */
+function cleanStudentName_(rawName, assignmentTitle, courseName) {
+  const original = String(rawName || '').trim();
+  if (!original) return '이름 없는 학생';
+
+  let name = original
+    // 파일 확장자 제거
+    .replace(/\.(?:docx?|pdf|hwpx?|txt|gdoc|rtf|odt)$/i, '')
+    // 사본 및 제출 상태 표기 제거
+    .replace(/^(?:Copy\s+of\s+|사본\s*[-_:·]\s*)/i, '')
+    .replace(/(?:\s*의\s*사본|\s*[-_]\s*사본|\s*[\(\[\{](?:사본|제출본|제출|최종|최종본|수정본|과제)[\)\]\}])$/gi, '')
+    .trim();
+
+  const removeContextTokens = [assignmentTitle, courseName]
+    .map(function(t) { return String(t || '').trim(); })
+    .filter(Boolean);
+
+  // 1) 명시적 과제명/수업명 접두사·접미사·대괄호 제거
+  for (let pass = 0; pass < 2; pass += 1) {
+    removeContextTokens.forEach(function(token) {
+      if (!token) return;
+      const escaped = escapeRegExp_(token);
+      // [과제명] 홍길동, (과제명) 홍길동
+      name = name.replace(new RegExp('^[\\(\\[\\{]?\\s*' + escaped + '\\s*[\\)\\]\\}]?\\s*(?:[-–—_:·|]|\\s)+', 'i'), '').trim();
+      // 홍길동 - 과제명, 홍길동 (과제명)
+      name = name.replace(new RegExp('(?:[-–—_:·|]|\\s)+[\\(\\[\\{]?\\s*' + escaped + '\\s*[\\)\\]\\}]?$', 'i'), '').trim();
+    });
+  }
+
+  // 2) 구분자(' - ', ' _ ', ' : ', ' · ')로 나뉜 경우 과제명과 유사한 파트를 제거하고 학생 이름 파트 선택
+  const separatorPattern = /\s+(?:[-–—_:·|])\s+|[-–—_:]/;
+  if (separatorPattern.test(name) && removeContextTokens.length) {
+    const parts = name.split(/\s*(?:[-–—_:·|])\s*/).map(function(p) { return p.trim(); }).filter(Boolean);
+    if (parts.length >= 2) {
+      const filteredParts = parts.filter(function(part) {
+        return !removeContextTokens.some(function(ctx) {
+          return isMatchingAssignmentSegment_(part, ctx);
+        });
+      });
+      if (filteredParts.length >= 1) {
+        name = filteredParts.join(' ');
+      }
+    }
+  }
+
+  // 3) 남아있는 사본/불필요 접미사 및 양끝 특수기호 정리
+  name = name
+    .replace(/(?:\s*의\s*사본|\s*[\(\[\{](?:사본|제출본|제출|최종)[\)\]\}])$/gi, '')
+    .replace(/^[-–—_:·|\s]+|[-–—_:·|\s]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  return name || original;
+}
+
+function isMatchingAssignmentSegment_(segment, contextTitle) {
+  const normSeg = normalizeCompareToken_(segment);
+  const normCtx = normalizeCompareToken_(contextTitle);
+  if (!normSeg || !normCtx) return false;
+  if (normSeg === normCtx) return true;
+  if (normCtx.length >= 3 && (normCtx.indexOf(normSeg) >= 0 || normSeg.indexOf(normCtx) >= 0)) {
+    return true;
+  }
+  return false;
+}
+
+function normalizeCompareToken_(value) {
+  return String(value || '').toLowerCase().replace(/[^a-z0-9가-힣]+/g, '');
+}
+
+function escapeRegExp_(value) {
+  return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * 외부 LLM API 전송 전 제출물 텍스트 내 실제 학생 이름을 익명 식별자(예: 학생_1)로 마스킹합니다.
+ */
+function anonymizeSubmissionText_(text, cleanName, rawDocName, anonymousName) {
+  let masked = String(text || '');
+  if (!masked) return masked;
+  const candidates = [];
+  const trimmedClean = String(cleanName || '').trim();
+  if (trimmedClean && trimmedClean.length >= 2 && trimmedClean !== '이름 없는 학생') {
+    candidates.push(trimmedClean);
+    // 학번+이름 형태(예: "10101 홍길동")인 경우 순수 이름 토큰도 함께 마스킹
+    const withoutNumber = trimmedClean.replace(/^[0-9]{1,8}\s*/, '').trim();
+    if (withoutNumber.length >= 2 && withoutNumber !== trimmedClean) {
+      candidates.push(withoutNumber);
+    }
+  }
+  candidates.forEach(function(token) {
+    masked = masked.replace(new RegExp(escapeRegExp_(token), 'g'), anonymousName);
+  });
+  return masked;
+}
+
+/**
+ * AI가 생성한 피드백/이유 문자열에 익명 식별자(학생_1 등)가 포함된 경우 실제 정제된 학생 이름으로 자연스럽게 복원합니다.
+ */
+function restoreAnonymousNameInText_(text, anonymousName, realStudentName) {
+  const raw = String(text || '');
+  if (!raw || !anonymousName || !realStudentName) return raw;
+  return raw.replace(new RegExp(escapeRegExp_(anonymousName), 'g'), realStudentName);
+}
+
 function createJobs(request) {
   const req = request || {};
-  if (!getApiKey_()) throw new Error('API 키를 먼저 저장해 주세요.');
+  if (req.baseUrl !== undefined || req.apiFormat !== undefined || req.apiKey !== undefined || req.presetId !== undefined || req.model !== undefined) {
+    saveSettings({
+      presetId: req.presetId,
+      baseUrl: req.baseUrl,
+      apiFormat: req.apiFormat,
+      apiKey: req.apiKey,
+      model: req.model,
+      gradingMode: req.gradingMode,
+      maxScore: req.maxScore,
+      maxOutputTokens: req.maxOutputTokens,
+      aiUseDetection: req.aiUseDetection
+    });
+  }
+  const settings = getSettings_();
+  const presetId = String(req.presetId !== undefined ? req.presetId : (settings.activePresetId || '')).trim();
+  const apiKey = getApiKey_(presetId);
+  if (!apiKey) throw new Error('API 키를 먼저 저장하거나 설정 시트에서 프리셋을 선택해 주세요.');
   if (!req.assignmentFolderId || req.assignmentFolderId === 'root') throw new Error('과제 폴더를 선택해 주세요.');
   if (!req.answerKeyId) throw new Error('정답지 Google Docs를 선택해 주세요.');
 
-  const settings = getSettings_();
   const apiFormat = normalizeApiFormat_(req.apiFormat || settings.apiFormat);
   const baseUrl = resolveBaseUrl_(req.baseUrl || settings.baseUrl, apiFormat);
   if (!baseUrl) throw new Error('API Base URL을 입력해 주세요.');
   const model = String(req.model || settings.model || '').trim();
   if (!model) throw new Error('사용할 AI 모델을 선택하거나 모델 ID를 입력해 주세요.');
   const answerKey = getDriveDocMeta_(req.answerKeyId);
-  const assignmentFolder = browseDriveFolder(req.assignmentFolderId);
+
+  let assignmentFolder;
+  if (Array.isArray(req.folderFiles) && req.folderFiles.length && req.assignmentFolderName) {
+    assignmentFolder = {
+      folderId: String(req.assignmentFolderId),
+      folderName: String(req.assignmentFolderName),
+      breadcrumbs: Array.isArray(req.breadcrumbs) ? req.breadcrumbs : [],
+      files: req.folderFiles
+    };
+  } else {
+    assignmentFolder = browseDriveFolder(req.assignmentFolderId);
+  }
+
   const mode = req.gradingMode === 'all' ? 'all' : 'quantitative';
   const maxScore = normalizeMaxScore_(req.maxScore || settings.maxScore);
   const maxOutputTokens = normalizeOutputTokens_(req.maxOutputTokens || settings.maxOutputTokens);
@@ -561,7 +990,7 @@ function createJobs(request) {
     : toBoolean_(req.aiUseDetection);
   const courseName = String(req.courseName || getClassFolderName_(assignmentFolder.breadcrumbs) || 'Classroom');
   const assignmentTitle = String(req.assignmentFolderName || assignmentFolder.folderName || '과제');
-  const submissions = listFolderSubmissions_(assignmentFolder);
+  const submissions = listFolderSubmissions_(assignmentFolder, assignmentTitle, courseName);
 
   if (!submissions.length) {
     throw new Error('선택한 과제 폴더(' + assignmentTitle + ')에 채점할 Google Docs 제출물이 없습니다.');
@@ -569,7 +998,7 @@ function createJobs(request) {
 
   const now = new Date();
   const jobId = Utilities.getUuid();
-  saveJob_({
+  const draftJob = {
     jobId: jobId,
     createdAt: now.toISOString(),
     scheduledAt: now.toISOString(),
@@ -583,19 +1012,22 @@ function createJobs(request) {
     answerKeyName: answerKey.name,
     baseUrl: baseUrl,
     apiFormat: apiFormat,
+    presetId: presetId,
     gradingMode: mode,
     maxScore: maxScore,
     model: model,
     maxOutputTokens: maxOutputTokens,
     aiUseDetection: aiUseDetection,
+    resultSheetName: '',
     status: 'WAITING',
     total: submissions.length,
     completed: 0,
     updatedAt: now.toISOString(),
     error: '',
-    submissions: submissions.map(function(item) {
+    submissions: submissions.map(function(item, idx) {
       return {
         submissionId: item.submissionId,
+        anonymousId: '학생_' + (idx + 1),
         studentId: item.studentId,
         studentName: item.studentName,
         docId: item.docId,
@@ -614,7 +1046,9 @@ function createJobs(request) {
         aiUseEvidence: ''
       };
     })
-  });
+  };
+  draftJob.resultSheetName = allocateUniqueResultSheetName_(draftJob);
+  saveJob_(draftJob);
 
   return getQueueStatus();
 }
@@ -623,34 +1057,44 @@ function getQueueStatus() {
   const jobs = loadJobs_().sort(function(a, b) {
     return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
   });
-  jobs.filter(function(job) { return job.status === 'DONE'; }).slice(APP.maxStoredDoneJobs).forEach(function(job) {
-    removeJob_(job.jobId);
-  });
-  return jobs.slice(0, APP.maxStoredDoneJobs).map(function(job) {
-    const submissions = job.submissions || [];
-    const completed = submissions.filter(function(item) { return item.status === 'DONE' || item.status === 'ERROR'; }).length;
-    const errors = submissions.filter(function(item) { return item.status === 'ERROR'; }).length;
-    return {
-      jobId: job.jobId,
-      courseName: job.courseName,
-      assignmentTitle: job.assignmentTitle,
-      answerKeyName: job.answerKeyName || '',
-      model: job.model || '',
-      status: job.status,
-      total: submissions.length,
-      completed: completed,
-      errors: errors,
-      scheduledAt: toIso_(job.scheduledAt),
-      updatedAt: toIso_(job.updatedAt),
-      error: job.error || ''
-    };
-  });
+  const overflowDoneIds = jobs
+    .filter(function(job) { return job.status === 'DONE'; })
+    .slice(APP.maxStoredDoneJobs)
+    .map(function(job) { return job.jobId; });
+  if (overflowDoneIds.length) {
+    removeJobs_(overflowDoneIds);
+  }
+  const overflowSet = {};
+  overflowDoneIds.forEach(function(id) { overflowSet[id] = true; });
+  return jobs
+    .filter(function(job) { return !overflowSet[job.jobId]; })
+    .slice(0, APP.maxStoredDoneJobs)
+    .map(function(job) {
+      const submissions = job.submissions || [];
+      const completed = submissions.filter(function(item) { return item.status === 'DONE' || item.status === 'ERROR'; }).length;
+      const errors = submissions.filter(function(item) { return item.status === 'ERROR'; }).length;
+      return {
+        jobId: job.jobId,
+        courseName: job.courseName,
+        assignmentTitle: job.assignmentTitle,
+        answerKeyName: job.answerKeyName || '',
+        model: job.model || '',
+        resultSheetName: job.resultSheetName || '',
+        status: job.status,
+        total: submissions.length,
+        completed: completed,
+        errors: errors,
+        scheduledAt: toIso_(job.scheduledAt),
+        updatedAt: toIso_(job.updatedAt),
+        error: job.error || ''
+      };
+    });
 }
 
 function deleteQueuedJob(jobId) {
   const job = loadJob_(String(jobId || ''));
   if (!job) throw new Error('삭제할 예약 작업을 찾지 못했습니다.');
-  if (['WAITING', 'QUEUED', 'STOPPED', 'DONE'].indexOf(job.status) < 0) {
+  if (['WAITING', 'QUEUED', 'STOPPED', 'DONE', 'ERROR'].indexOf(job.status) < 0) {
     throw new Error('채점 진행 중(RUNNING)이 아닌 작업만 삭제할 수 있습니다.');
   }
   removeJob_(job.jobId);
@@ -658,28 +1102,66 @@ function deleteQueuedJob(jobId) {
   return getQueueStatus();
 }
 
+function isFinishedOrFailedJob_(job) {
+  if (!job) return false;
+  return ['DONE', 'ERROR', 'STOPPED'].indexOf(job.status) >= 0;
+}
+
+/**
+ * 완료(DONE) 또는 실패/중단(ERROR, STOPPED) 상태인 작업 목록을 일괄 삭제합니다.
+ */
+function clearFinishedJobs() {
+  const jobs = loadJobs_();
+  const targetIds = jobs
+    .filter(isFinishedOrFailedJob_)
+    .map(function(job) { return job.jobId; });
+  const deletedCount = removeJobs_(targetIds);
+  if (!hasRunnableJobs_()) removeQueueTriggers_();
+  return {
+    deletedCount: deletedCount,
+    jobs: getQueueStatus()
+  };
+}
+
+/**
+ * clearFinishedJobs의 별칭 함수 (호환성 유지)
+ */
+function deleteCompletedOrFailedJobs() {
+  return clearFinishedJobs();
+}
+
+function resetStoppedJobState_(job, defaultErrorMsg) {
+  let resetCount = 0;
+  const nowIso = new Date().toISOString();
+  (job.submissions || []).forEach(function(item) {
+    if (item.status === 'ERROR' && item.docId) {
+      item.status = 'PENDING';
+      item.error = '';
+      item.updatedAt = nowIso;
+      resetCount += 1;
+    }
+  });
+  const hasPending = (job.submissions || []).some(function(item) { return item.status === 'PENDING'; });
+  if (!resetCount && !hasPending) return false;
+
+  job.status = 'QUEUED';
+  job.scheduledAt = nowIso;
+  job.providerRetryCount = 0;
+  if (String(job.error || '').indexOf('JSON') >= 0) {
+    job.submissionBatchSize = APP.retrySubmissionBatchSize;
+    job.error = 'JSON 응답 오류 제출물을 작은 묶음(' + APP.retrySubmissionBatchSize + '명 이하)으로 다시 채점합니다.';
+  } else {
+    job.error = defaultErrorMsg || '중단된 작업을 재시도 대기열로 복구했습니다.';
+  }
+  job.updatedAt = nowIso;
+  return true;
+}
+
 function retryStoppedJobs() {
   let resetJobsCount = 0;
   loadJobs_().forEach(function(job) {
-    if (job.status !== 'STOPPED') return;
-    let resetCount = 0;
-    (job.submissions || []).forEach(function(item) {
-      if (item.status === 'ERROR' && item.docId) {
-        item.status = 'PENDING';
-        item.error = '';
-        item.updatedAt = new Date().toISOString();
-        resetCount += 1;
-      }
-    });
-    if (resetCount > 0 || (job.submissions || []).some(function(item) { return item.status === 'PENDING'; })) {
-      job.status = 'QUEUED';
-      job.scheduledAt = new Date().toISOString();
-      job.providerRetryCount = 0;
-      if (String(job.error || '').indexOf('JSON') >= 0) {
-        job.submissionBatchSize = APP.retrySubmissionBatchSize;
-      }
-      job.error = '중단된 작업을 재시도 대기열로 복구했습니다.';
-      job.updatedAt = new Date().toISOString();
+    if (job.status !== 'STOPPED' && job.status !== 'ERROR') return;
+    if (resetStoppedJobState_(job, '중단된 작업을 재시도 대기열로 복구했습니다.')) {
       saveJob_(job);
       resetJobsCount += 1;
     }
@@ -688,35 +1170,17 @@ function retryStoppedJobs() {
 }
 
 function runAllQueuedJobs() {
+  const nowIso = new Date().toISOString();
   loadJobs_().forEach(function(job) {
     if (['WAITING', 'QUEUED', 'RUNNING'].indexOf(job.status) >= 0) {
       job.status = 'QUEUED';
-      job.scheduledAt = new Date().toISOString();
+      job.scheduledAt = nowIso;
       job.error = '';
       saveJob_(job);
       return;
     }
-    if (job.status === 'STOPPED') {
-      let resetCount = 0;
-      (job.submissions || []).forEach(function(item) {
-        if (item.status === 'ERROR' && item.docId) {
-          item.status = 'PENDING';
-          item.error = '';
-          item.updatedAt = new Date().toISOString();
-          resetCount += 1;
-        }
-      });
-      if (resetCount || (job.submissions || []).some(function(item) { return item.status === 'PENDING'; })) {
-        job.status = 'QUEUED';
-        job.scheduledAt = new Date().toISOString();
-        job.providerRetryCount = 0;
-        if (String(job.error || '').indexOf('유효한 JSON이 아닙니다') >= 0) {
-          job.submissionBatchSize = APP.retrySubmissionBatchSize;
-          job.error = 'JSON 응답 오류 제출물을 작은 묶음(' + APP.retrySubmissionBatchSize + '명 이하)으로 다시 채점합니다.';
-        } else {
-          job.error = '중단된 작업을 다시 채점합니다.';
-        }
-        job.updatedAt = new Date().toISOString();
+    if (job.status === 'STOPPED' || job.status === 'ERROR') {
+      if (resetStoppedJobState_(job, '중단된 작업을 다시 채점합니다.')) {
         saveJob_(job);
       }
     }
@@ -757,6 +1221,11 @@ function processQueue() {
 
 function processStoredJob_(job, startedAt) {
   const submissions = job.submissions || [];
+  submissions.forEach(function(item, idx) {
+    item.studentName = cleanStudentName_(item.studentName || item.docName, job.assignmentTitle, job.courseName);
+    if (!item.anonymousId) item.anonymousId = '학생_' + (idx + 1);
+  });
+
   const pendingCandidates = submissions.filter(function(item) {
     return item.status === 'PENDING' && item.docId;
   });
@@ -817,20 +1286,24 @@ function processStoredJob_(job, startedAt) {
       break;
     }
     const item = candidates[i];
+    const anonymousName = item.anonymousId || ('학생_' + (i + 1));
+    const anonymousDocName = '제출물_' + (i + 1);
     try {
-      const text = extractGoogleDocText_(item.docId);
-      if (!text) {
+      const rawText = extractGoogleDocText_(item.docId);
+      if (!rawText) {
         item.status = 'ERROR';
         item.error = '제출물 문서 내용이 비어 있습니다.';
         item.updatedAt = new Date().toISOString();
         continue;
       }
+      const anonymizedText = anonymizeSubmissionText_(rawText, item.studentName, item.docName, anonymousName);
       validCandidates.push(item);
       documents.push({
         submissionId: item.submissionId,
-        studentName: item.studentName,
-        documentName: item.docName,
-        text: text
+        anonymousId: anonymousName,
+        studentName: anonymousName,
+        documentName: anonymousDocName,
+        text: anonymizedText
       });
     } catch (docErr) {
       item.status = 'ERROR';
@@ -852,18 +1325,21 @@ function processStoredJob_(job, startedAt) {
     const response = gradeAssignmentWithApi_(job, answerKeyText, documents);
     const resultMap = {};
     (response.results || []).forEach(function(result) {
-      if (result && result.submissionId) resultMap[String(result.submissionId)] = result;
+      if (!result) return;
+      if (result.submissionId) resultMap[String(result.submissionId)] = result;
+      if (result.studentName) resultMap[String(result.studentName)] = result;
     });
     const resultRows = [];
-    validCandidates.forEach(function(item) {
-      const result = resultMap[String(item.submissionId)];
+    validCandidates.forEach(function(item, idx) {
+      const anonymousName = item.anonymousId || ('학생_' + (idx + 1));
+      const result = resultMap[String(item.submissionId)] || resultMap[String(anonymousName)];
       item.updatedAt = new Date().toISOString();
       if (!result) {
         item.status = 'ERROR';
         item.error = 'AI 응답에 해당 제출물 결과가 없습니다.';
         return;
       }
-      const normalized = normalizeGrade_(result, job);
+      const normalized = normalizeGrade_(result, job, anonymousName, item.studentName);
       item.status = 'DONE';
       item.score = normalized.score;
       item.quantitativeScore = normalized.quantitativeScore;
@@ -945,8 +1421,13 @@ function processStoredJob_(job, startedAt) {
 }
 
 function buildResultRow_(job, submission, normalized) {
+  const pureStudentName = cleanStudentName_(
+    submission.studentName || submission.docName,
+    job.assignmentTitle,
+    job.courseName
+  );
   return [
-    submission.studentName, normalized.score, Number(job.maxScore), normalized.aiUseSuspicion,
+    pureStudentName, normalized.score, Number(job.maxScore), normalized.aiUseSuspicion,
     normalized.aiUseSuspicionScore, normalized.qualitativeScore, normalized.feedback,
     normalized.confidence, new Date(), job.courseName, job.assignmentTitle, submission.studentId,
     'https://docs.google.com/document/d/' + submission.docId + '/edit',
@@ -1093,15 +1574,16 @@ function getProviderHeaders_(apiFormat, apiKey, baseUrl) {
 }
 
 function gradeAssignmentWithApi_(job, answerKeyText, documents) {
-  const apiKey = getApiKey_();
+  const apiKey = getApiKey_(job && job.presetId);
   if (!apiKey) {
-    const error = new Error('API 키가 없습니다. 사이드바에서 다시 저장해 주세요.');
+    const error = new Error('API 키가 없습니다. 사이드바에서 다시 저장하거나 설정 시트 프리셋을 확인해 주세요.');
     error.isPermanentProviderError = true;
     throw error;
   }
-  const apiFormat = normalizeApiFormat_(job.apiFormat);
-  const baseUrl = resolveBaseUrl_(job.baseUrl || getSettings_().baseUrl, apiFormat);
-  const model = String(job.model || getSettings_().model || '').trim();
+  const settings = (!job.baseUrl || !job.model) ? getSettings_() : null;
+  const apiFormat = normalizeApiFormat_(job.apiFormat || (settings && settings.apiFormat));
+  const baseUrl = resolveBaseUrl_(job.baseUrl || (settings && settings.baseUrl), apiFormat);
+  const model = String(job.model || (settings && settings.model) || '').trim();
   if (!model) {
     const error = new Error('모델 ID가 지정되지 않았습니다. 사이드바에서 모델을 선택하거나 입력해 주세요.');
     error.isPermanentProviderError = true;
@@ -1113,14 +1595,17 @@ function gradeAssignmentWithApi_(job, answerKeyText, documents) {
   const aiDetectionRule = job.aiUseDetection
     ? '정성평가 문장에 대해 AI 사용 의심 신호도 분석하라. 이는 확정 판정이 아니라 참고용 휴리스틱이며, 문체만으로 단정하지 마라. aiUseSuspicion은 high|medium|low 중 하나, aiUseSuspicionScore는 0~100, aiUseSuspicionReason은 짧은 설명, aiUseEvidence는 답안에서 관찰된 근거 문장 배열로 반환하라.'
     : 'AI 사용 의심 분석은 요청되지 않았다. aiUseSuspicion은 not_checked, aiUseSuspicionScore는 0, aiUseSuspicionReason과 aiUseEvidence는 빈 값으로 반환하라.';
+  // 외부 API 전송 시 개인정보 보호를 위해 항상 익명화된 이름(학생_1 등)과 익명 문서명(제출물_1 등)만 전송합니다.
   const gradingData = JSON.stringify({
     answerKey: answerKeyText,
-    submissions: documents.map(function(document) {
+    submissions: documents.map(function(document, idx) {
+      const anonLabel = document.anonymousId || ('학생_' + (idx + 1));
+      const anonDocLabel = '제출물_' + (idx + 1);
       return {
         submissionId: document.submissionId,
-        studentName: document.studentName,
-        documentName: document.documentName,
-        text: document.text
+        studentName: anonLabel,
+        documentName: anonDocLabel,
+        text: anonymizeSubmissionText_(document.text, document.realStudentName || '', document.documentName || '', anonLabel)
       };
     })
   });
@@ -1266,17 +1751,20 @@ function extractProviderResponseText_(parsed, apiFormat) {
   }).filter(function(text) { return Boolean(text); }).join('').trim();
 }
 
-function listFolderSubmissions_(folderOrId) {
+function listFolderSubmissions_(folderOrId, assignmentTitle, courseName) {
   const browser = (folderOrId && typeof folderOrId === 'object' && Array.isArray(folderOrId.files))
     ? folderOrId
     : browseDriveFolder(folderOrId);
+  const effectiveAssignmentTitle = assignmentTitle || (browser && browser.folderName) || '';
+  const effectiveCourseName = courseName || getClassFolderName_(browser && browser.breadcrumbs) || '';
   return (browser.files || []).map(function(file) {
+    const rawDocName = file.name || '이름 없는 제출물';
     return {
       submissionId: String(file.id),
       studentId: '',
-      studentName: file.name || '이름 없는 제출물',
+      studentName: cleanStudentName_(rawDocName, effectiveAssignmentTitle, effectiveCourseName),
       docId: String(file.id),
-      docName: file.name || '이름 없는 제출물'
+      docName: rawDocName
     };
   });
 }
@@ -1313,31 +1801,74 @@ function getDriveDocMeta_(fileId) {
   }
 }
 
+/**
+ * 결과 시트 제목에 사용할 채점 일시 문자열(YYYYMMDD_HHMMSS)을 생성합니다.
+ */
+function formatSheetTimestamp_(dateValue) {
+  const date = dateValue ? new Date(dateValue) : new Date();
+  const validDate = isNaN(date.getTime()) ? new Date() : date;
+  try {
+    const tz = (typeof Session !== 'undefined' && Session && Session.getScriptTimeZone && Session.getScriptTimeZone()) || APP.timeZone;
+    if (typeof Utilities !== 'undefined' && Utilities && Utilities.formatDate) {
+      return Utilities.formatDate(validDate, tz, 'yyyyMMdd_HHmmss');
+    }
+  } catch (ignored) {}
+  const pad = function(n) { return (n < 10 ? '0' : '') + n; };
+  return (
+    validDate.getFullYear() +
+    pad(validDate.getMonth() + 1) +
+    pad(validDate.getDate()) + '_' +
+    pad(validDate.getHours()) +
+    pad(validDate.getMinutes()) +
+    pad(validDate.getSeconds())
+  );
+}
+
+/**
+ * 과제명, 사용된 모델명, 채점 일시가 명확하게 포함된 결과 시트 이름(예: 과제명_모델명_YYYYMMDD_HHMMSS)을 생성합니다.
+ */
+function buildResultSheetName_(job, customTimestamp) {
+  const rawAssignment = String((job && (job.assignmentTitle || job.courseName)) || '과제')
+    .replace(/[\\/:?*\[\]]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 40) || '과제';
+  const rawModel = String((job && job.model) || 'AI모델')
+    .trim()
+    .replace(/^models\//i, '')
+    .replace(/[\\/:?*\[\]\s]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 30) || 'AI모델';
+  const timestamp = customTimestamp || formatSheetTimestamp_(job && (job.createdAt || job.scheduledAt));
+  return sanitizeSheetName_(rawAssignment + '_' + rawModel + '_' + timestamp);
+}
+
+/**
+ * 동일 과제를 재채점할 때 기존 결과 시트를 덮어쓰지 않도록 고유한 결과 시트 이름을 할당합니다.
+ */
+function allocateUniqueResultSheetName_(job, spreadsheet) {
+  const baseName = buildResultSheetName_(job);
+  const book = spreadsheet || SpreadsheetApp.getActive();
+  if (!book) return baseName;
+  if (!book.getSheetByName(baseName)) return baseName;
+  let suffix = 2;
+  while (suffix < 1000) {
+    const suffixText = '_' + suffix;
+    const candidate = sanitizeSheetName_(baseName.slice(0, 95 - suffixText.length) + suffixText);
+    if (!book.getSheetByName(candidate)) return candidate;
+    suffix += 1;
+  }
+  return sanitizeSheetName_(baseName.slice(0, 88) + '_' + Date.now().toString().slice(-5));
+}
+
 function getAssignmentResultSheet_(job) {
   const spreadsheet = SpreadsheetApp.getActive();
-  const sheetName = sanitizeSheetName_(String(job.courseName || '클래스') + '_' + String(job.assignmentTitle || '과제'));
-  const headers = [
-    '학생명', '점수', '만점', 'AI 의심', 'AI 의심 점수', '정성점수', '피드백', '신뢰도',
-    '채점일시', '클래스', '과제', '학생ID', '학생 답안', '정답지', 'AI 의심 이유',
-    'AI 의심 근거', '작업ID'
-  ];
-  ensureSheet_(spreadsheet, sheetName, headers);
-  const sheet = spreadsheet.getSheetByName(sheetName);
-  const currentHeader = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), headers.length)).getValues()[0];
-  if (currentHeader[0] === 'gradedAt') {
-    const oldRows = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 18).getValues() : [];
-    const migratedRows = oldRows.map(function(row) {
-      return [
-        row[4], row[6], row[7], row[14] || 'not_checked', row[15] || 0, row[9], row[10], row[11],
-        row[0], row[2], row[3], row[5], row[12], row[13], row[16] || '', row[17] || '', row[1]
-      ];
-    });
-    sheet.clearContents();
-    sheet.getRange(1, 1, 1, headers.length).setValues([headers]).setFontWeight('bold');
-    if (migratedRows.length) sheet.getRange(2, 1, migratedRows.length, headers.length).setValues(migratedRows);
-    sheet.setFrozenRows(1);
+  if (!job.resultSheetName) {
+    job.resultSheetName = allocateUniqueResultSheetName_(job, spreadsheet);
   }
-  return sheet;
+  const sheetName = sanitizeSheetName_(job.resultSheetName);
+  const headers = APP.resultHeaders;
+  return ensureSheet_(spreadsheet, sheetName, headers);
 }
 
 function sanitizeSheetName_(value) {
@@ -1345,24 +1876,27 @@ function sanitizeSheetName_(value) {
   return (sanitized || APP.resultsSheet).slice(0, 95);
 }
 
-function normalizeGrade_(result, job) {
+function normalizeGrade_(result, job, anonymousName, realStudentName) {
   const maxScore = Number(job.maxScore) || 100;
   const quantitativeScore = clamp_(Number(result.quantitativeScore) || 0, 0, maxScore);
   const qualitativeScore = job.gradingMode === 'all' ? clamp_(Number(result.qualitativeScore) || 0, 0, maxScore) : 0;
   let score = job.gradingMode === 'all' ? Number(result.finalScore) : quantitativeScore;
   if (!isFinite(score)) score = job.gradingMode === 'all' ? (quantitativeScore + qualitativeScore) : quantitativeScore;
+  const rawFeedback = restoreAnonymousNameInText_(String(result.feedback || ''), anonymousName, realStudentName);
+  const rawReason = restoreAnonymousNameInText_(String(result.aiUseSuspicionReason || ''), anonymousName, realStudentName);
+  const rawEvidence = restoreAnonymousNameInText_(normalizeEvidence_(result.aiUseEvidence), anonymousName, realStudentName);
   return {
     score: round_(clamp_(score, 0, maxScore)),
     quantitativeScore: round_(quantitativeScore),
     qualitativeScore: round_(qualitativeScore),
-    feedback: String(result.feedback || '').slice(0, 2000),
+    feedback: rawFeedback.slice(0, 2000),
     confidence: ['high', 'medium', 'low'].indexOf(String(result.confidence || '').toLowerCase()) >= 0
       ? String(result.confidence).toLowerCase()
       : 'medium',
     aiUseSuspicion: job.aiUseDetection ? normalizeSuspicionLevel_(result.aiUseSuspicion) : 'not_checked',
     aiUseSuspicionScore: job.aiUseDetection ? clamp_(Number(result.aiUseSuspicionScore) || 0, 0, 100) : 0,
-    aiUseSuspicionReason: job.aiUseDetection ? String(result.aiUseSuspicionReason || '').slice(0, 1000) : '',
-    aiUseEvidence: job.aiUseDetection ? normalizeEvidence_(result.aiUseEvidence) : ''
+    aiUseSuspicionReason: job.aiUseDetection ? rawReason.slice(0, 1000) : '',
+    aiUseEvidence: job.aiUseDetection ? rawEvidence : ''
   };
 }
 
@@ -1409,7 +1943,9 @@ function getSettings_() {
     gradingMode: 'quantitative',
     maxScore: 100,
     maxOutputTokens: APP.defaultMaxOutputTokens,
-    aiUseDetection: false
+    aiUseDetection: false,
+    activePresetId: '',
+    activePresetName: ''
   };
   const raw = PropertiesService.getUserProperties().getProperty(APP.settingsKey);
   if (!raw) return defaults;
@@ -1423,7 +1959,9 @@ function getSettings_() {
       gradingMode: value.gradingMode === 'all' ? 'all' : 'quantitative',
       maxScore: normalizeMaxScore_(value.maxScore),
       maxOutputTokens: normalizeOutputTokens_(value.maxOutputTokens || APP.defaultMaxOutputTokens),
-      aiUseDetection: toBoolean_(value.aiUseDetection)
+      aiUseDetection: toBoolean_(value.aiUseDetection),
+      activePresetId: String(value.activePresetId || ''),
+      activePresetName: String(value.activePresetName || '')
     };
   } catch (ignored) {
     return defaults;
@@ -1438,10 +1976,17 @@ function ensureSheet_(spreadsheet, name, headers) {
     sheet.setFrozenRows(1);
   } else {
     const currentHeaders = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), headers.length)).getValues()[0];
-    headers.forEach(function(header, index) {
-      if (!currentHeaders[index]) sheet.getRange(1, index + 1).setValue(header);
+    let needsUpdate = false;
+    const mergedHeaders = headers.map(function(header, index) {
+      if (currentHeaders[index]) return currentHeaders[index];
+      needsUpdate = true;
+      return header;
     });
+    if (needsUpdate) {
+      sheet.getRange(1, 1, 1, mergedHeaders.length).setValues([mergedHeaders]).setFontWeight('bold');
+    }
   }
+  return sheet;
 }
 
 function normalizeMaxScore_(value) {

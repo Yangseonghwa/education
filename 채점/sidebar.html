@@ -33,10 +33,13 @@
     button.secondary { color: var(--blue); background: #e8f0fe; }
     button.secondary:hover:not(:disabled) { background: #d2e3fc; }
     button.danger { color: var(--danger); background: var(--danger-bg); }
+    button.danger:hover:not(:disabled) { background: #f9d2ce; }
     button:disabled { opacity: .6; cursor: wait; }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
     .model-row { grid-template-columns: 1fr auto; align-items: end; }
     .model-row button { margin-top: 0; min-height: 34px; width: auto; white-space: nowrap; }
+    .preset-row { grid-template-columns: 1fr auto auto; align-items: end; }
+    .preset-row button { margin-top: 0; min-height: 34px; width: auto; padding: 7px 10px; white-space: nowrap; }
     .badge { display: inline-block; padding: 2px 7px; border-radius: 999px; font-size: 11px; font-weight: 600; }
     .badge.ok { color: var(--success); background: var(--success-bg); }
     .badge.missing { color: var(--danger); background: var(--danger-bg); }
@@ -59,13 +62,23 @@
 </head>
 <body>
   <h1>AI 자동 채점</h1>
-  <div class="subtle">선택한 API 규격으로 Classroom 제출물을 채점합니다.</div>
+  <div class="subtle">선택한 API 규격으로 Classroom 제출물을 익명화하여 안전하게 채점합니다.</div>
 
   <div class="section">
     <h2>
       <span>API 설정</span>
       <span id="apiKeyStatus" class="badge missing">API 키 미저장</span>
     </h2>
+    <label for="presetSelect">설정 시트 프리셋 (URL &amp; API Key)</label>
+    <div class="row preset-row">
+      <select id="presetSelect">
+        <option value="">직접 입력 / 설정 시트 프리셋 선택...</option>
+      </select>
+      <button type="button" class="secondary" id="refreshPresets" title="설정 시트에서 프리셋 목록 다시 읽기">새로고침</button>
+      <button type="button" class="secondary" id="openConfigSheet" title="AI채점_설정 시트 열기">시트 열기</button>
+    </div>
+    <div id="presetHint" class="subtle">시트(AI채점_설정)에 엔드포인트 URL과 API Key를 저장해 두고 선택할 수 있습니다.</div>
+
     <label for="apiFormat">API 규격</label>
     <select id="apiFormat">
       <option value="chat_completions">OpenAI 호환 · Chat Completions</option>
@@ -77,7 +90,7 @@
     <input id="baseUrl" type="url" placeholder="https://api.openai.com/v1">
     <div id="apiFormatHint" class="subtle"></div>
     <label for="apiKey">API 키</label>
-    <input id="apiKey" type="password" placeholder="API 키를 입력하세요. 저장된 키는 다시 표시하지 않습니다.">
+    <input id="apiKey" type="password" placeholder="API 키를 입력하거나 위 프리셋을 선택하세요.">
     <label for="modelSelect">모델 선택 (API 키로 실시간 조회)</label>
     <div class="row model-row">
       <select id="modelSelect"><option value="">API 키를 입력하고 [불러오기]를 누르세요.</option></select>
@@ -117,7 +130,7 @@
       <div><label for="maxScore">만점</label><input id="maxScore" type="number" min="1" max="100000" step="1" value="100"></div>
       <div><label for="maxOutputTokens">최대 출력 토큰</label><input id="maxOutputTokens" type="number" min="1024" max="65536" step="1024" value="16384"></div>
     </div>
-    <div class="subtle">전체 제출물을 먼저 한 번에 채점합니다. JSON 오류 시 13명 이하 묶음으로 분할 재시도합니다.</div>
+    <div class="subtle">학생 이름은 외부 API 전송 시 익명(학생_1 등)으로 변환되며, 재채점 시 모델·일시가 포함된 새 시트에 기록됩니다.</div>
     <label><input id="aiUseDetection" type="checkbox"> 정성평가 문장의 AI 사용 의심 분석 포함</label>
     <div class="subtle">확정 판정이 아닌 참고용 신호이며, 의심 수준과 근거 문장을 결과 시트에 기록합니다.</div>
     <button type="button" id="start">예약 큐에 추가</button>
@@ -128,7 +141,10 @@
     <h2>예약 큐 확인</h2>
     <div id="jobs"><div class="subtle">작업 없음</div></div>
     <button type="button" id="runAll">예약 큐 전체 실행</button>
-    <button type="button" class="secondary" id="refreshJobs">상태 새로고침</button>
+    <div class="row">
+      <button type="button" class="secondary" id="refreshJobs">상태 새로고침</button>
+      <button type="button" class="danger" id="clearFinishedJobs" disabled>완료/실패 목록 전체 삭제</button>
+    </div>
   </div>
 
   <script>
@@ -161,12 +177,15 @@
       hasApiKey: false,
       pendingAssignment: null,
       confirmedAssignmentId: '',
+      presets: [],
       models: [],
       settings: {},
       assignmentBrowser: null,
-      answerKeyBrowser: null
+      answerKeyBrowser: null,
+      jobs: []
     };
     let queueStatusRequestId = 0;
+    let isQueueActionBusy = false;
 
     function call(name, ...args) {
       return new Promise((resolve, reject) => {
@@ -185,14 +204,43 @@
     function updateApiKeyBadge(hasKey) {
       data.hasApiKey = Boolean(hasKey);
       const badge = $('apiKeyStatus');
+      const activePreset = (data.presets || []).find((p) => p.id === $('presetSelect').value);
       if (data.hasApiKey) {
-        badge.textContent = 'API 키 저장됨';
+        badge.textContent = activePreset ? ('API 키 준비됨 · ' + activePreset.name) : 'API 키 저장됨';
         badge.className = 'badge ok';
       } else {
         badge.textContent = 'API 키 미저장';
         badge.className = 'badge missing';
       }
       $('clearApiKey').disabled = !data.hasApiKey;
+    }
+
+    function renderPresets() {
+      const presets = Array.isArray(data.presets) ? data.presets : [];
+      const activeId = (data.settings && data.settings.activePresetId) || $('presetSelect').value || '';
+      $('presetSelect').innerHTML = '<option value="">직접 입력 / 설정 시트 프리셋 선택 (' + presets.length + '개)</option>' +
+        presets.map((preset) => {
+          const keyBadge = preset.hasApiKey ? '🔑' : '⚠️키없음';
+          const label = preset.name + ' [' + preset.apiFormat + '] ' + keyBadge;
+          return '<option value="' + escapeHtml(preset.id) + '">' + escapeHtml(label) + '</option>';
+        }).join('');
+      if (activeId && presets.some((p) => p.id === activeId)) {
+        $('presetSelect').value = activeId;
+      } else {
+        $('presetSelect').value = '';
+      }
+      updatePresetHint();
+    }
+
+    function updatePresetHint() {
+      const selectedId = $('presetSelect').value;
+      const preset = (data.presets || []).find((p) => p.id === selectedId);
+      if (!preset) {
+        $('presetHint').textContent = '시트(AI채점_설정)에 엔드포인트 URL과 API Key를 저장해 두고 선택할 수 있습니다.';
+        return;
+      }
+      const keyInfo = preset.hasApiKey ? ('API 키: ' + preset.maskedApiKey) : '시트에 API 키 미입력(직접 입력 가능)';
+      $('presetHint').textContent = preset.sheetName + ' ' + preset.rowNumber + '행 · ' + keyInfo + (preset.note ? (' · ' + preset.note) : '');
     }
 
     function updateApiFormatHint(autoSwitchDefaultUrl) {
@@ -225,15 +273,17 @@
 
     async function loadModels() {
       const enteredKey = $('apiKey').value.trim();
-      if (!enteredKey && !data.hasApiKey) {
-        showMessage('모델 목록을 조회하려면 API 키를 입력하거나 먼저 저장해 주세요.', true);
+      const presetId = $('presetSelect').value;
+      const selectedPreset = (data.presets || []).find((p) => p.id === presetId);
+      if (!enteredKey && !data.hasApiKey && !(selectedPreset && selectedPreset.hasApiKey)) {
+        showMessage('모델 목록을 조회하려면 API 키를 입력하거나 API 키가 포함된 프리셋을 선택해 주세요.', true);
         return;
       }
       $('refreshModels').disabled = true;
       showMessage('선택한 API 규격에서 사용 가능한 모델 목록을 불러오는 중입니다...');
       try {
-        const fetched = await call('listAvailableModels', $('baseUrl').value, $('apiFormat').value, enteredKey);
-        if (enteredKey) {
+        const fetched = await call('listAvailableModels', $('baseUrl').value, $('apiFormat').value, enteredKey, presetId);
+        if (enteredKey || (selectedPreset && selectedPreset.hasApiKey)) {
           $('apiKey').value = '';
           updateApiKeyBadge(true);
         }
@@ -292,6 +342,56 @@
       return String(value || '').toLowerCase().replace(/[^a-z0-9가-힣]+/g, '');
     }
 
+    function escapeRegExpClient(value) {
+      return String(value || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    function getCourseNameFromBreadcrumbs(breadcrumbs) {
+      const items = breadcrumbs || [];
+      for (let i = 0; i < items.length - 1; i += 1) {
+        const n = normalizeName(items[i].name);
+        if (n === 'classroom' || n === '클래스룸') return items[i + 1].name || '';
+      }
+      return '';
+    }
+
+    function cleanStudentNameClient(rawName, assignmentTitle, courseName) {
+      const original = String(rawName || '').trim();
+      if (!original) return '이름 없는 학생';
+      let name = original
+        .replace(/\.(?:docx?|pdf|hwpx?|txt|gdoc|rtf|odt)$/i, '')
+        .replace(/^(?:Copy\s+of\s+|사본\s*[-_:·]\s*)/i, '')
+        .replace(/(?:\s*의\s*사본|\s*[-_]\s*사본|\s*[\(\[\{](?:사본|제출본|제출|최종|최종본|수정본|과제)[\)\]\}])$/gi, '')
+        .trim();
+      const tokens = [assignmentTitle, courseName].map((t) => String(t || '').trim()).filter(Boolean);
+      for (let pass = 0; pass < 2; pass += 1) {
+        tokens.forEach((token) => {
+          const escaped = escapeRegExpClient(token);
+          name = name.replace(new RegExp('^[\\(\\[\\{]?\\s*' + escaped + '\\s*[\\)\\]\\}]?\\s*(?:[-–—_:·|]|\\s)+', 'i'), '').trim();
+          name = name.replace(new RegExp('(?:[-–—_:·|]|\\s)+[\\(\\[\\{]?\\s*' + escaped + '\\s*[\\)\\]\\}]?$', 'i'), '').trim();
+        });
+      }
+      if (/\s+(?:[-–—_:·|])\s+|[-–—_:]/.test(name) && tokens.length) {
+        const parts = name.split(/\s*(?:[-–—_:·|])\s*/).map((p) => p.trim()).filter(Boolean);
+        if (parts.length >= 2) {
+          const filtered = parts.filter((part) => {
+            const normPart = normalizeName(part);
+            return !tokens.some((ctx) => {
+              const normCtx = normalizeName(ctx);
+              return normPart && normCtx && (normPart === normCtx || (normCtx.length >= 3 && (normCtx.indexOf(normPart) >= 0 || normPart.indexOf(normCtx) >= 0)));
+            });
+          });
+          if (filtered.length >= 1) name = filtered.join(' ');
+        }
+      }
+      name = name
+        .replace(/(?:\s*의\s*사본|\s*[\(\[\{](?:사본|제출본|제출|최종)[\)\]\}])$/gi, '')
+        .replace(/^[-–—_:·|\s]+|[-–—_:·|\s]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      return name || original;
+    }
+
     function isClassroomRoot_(browser) {
       const name = normalizeName(browser && (browser.folderName || browser.name));
       return name === 'classroom' || name === '클래스룸';
@@ -315,8 +415,17 @@
         $('assignmentSelection').textContent = 'Classroom 안에서 수업 폴더 › 과제 폴더를 선택하세요.';
         return;
       }
-      const docCount = (folder.files || []).length;
-      data.pendingAssignment = { id: folder.folderId, title: folder.folderName, docCount: docCount };
+      const files = folder.files || [];
+      const docCount = files.length;
+      const courseName = getCourseNameFromBreadcrumbs(folder.breadcrumbs);
+      const purifiedNames = files.map((f) => cleanStudentNameClient(f.name, folder.folderName, courseName));
+      data.pendingAssignment = {
+        id: folder.folderId,
+        title: folder.folderName,
+        courseName: courseName,
+        docCount: docCount,
+        studentNames: purifiedNames
+      };
       data.confirmedAssignmentId = '';
       if (docCount === 0) {
         $('confirmAssignment').disabled = true;
@@ -324,22 +433,45 @@
         $('assignmentSelection').textContent = '선택한 폴더(' + folder.folderName + ')에 채점할 Google Docs 제출물이 없습니다.';
         return;
       }
+      const sampleNames = purifiedNames.slice(0, 4).join(', ') + (purifiedNames.length > 4 ? (' 외 ' + (purifiedNames.length - 4) + '명') : '');
       $('confirmAssignment').disabled = false;
       $('assignmentSelection').className = 'status';
-      $('assignmentSelection').textContent = '선택한 과제 폴더: ' + folder.folderName + ' (Google Docs ' + docCount + '건 · 확정 버튼을 눌러 주세요.)';
+      $('assignmentSelection').textContent = '선택한 과제 폴더: ' + folder.folderName + ' (제출물 ' + docCount + '건 · 학생: ' + sampleNames + ')';
+    }
+
+    function isFinishedOrFailedStatus(status) {
+      return ['DONE', 'STOPPED', 'ERROR'].indexOf(status) >= 0;
     }
 
     function renderJobs(jobs) {
-      if (!jobs || !jobs.length) {
+      data.jobs = Array.isArray(jobs) ? jobs : [];
+      const finishedCount = data.jobs.filter((job) => isFinishedOrFailedStatus(job.status)).length;
+      const clearBtn = $('clearFinishedJobs');
+      if (clearBtn) {
+        clearBtn.disabled = finishedCount === 0;
+        clearBtn.textContent = finishedCount > 0
+          ? ('완료/실패 목록 전체 삭제 (' + finishedCount + '건)')
+          : '완료/실패 목록 전체 삭제';
+      }
+
+      if (!data.jobs.length) {
         $('jobs').innerHTML = '<div class="subtle">작업 없음</div>';
         return;
       }
-      $('jobs').innerHTML = jobs.map((job) => {
+      $('jobs').innerHTML = data.jobs.map((job) => {
         const progress = job.total ? job.completed + '/' + job.total : '제출물 없음';
-        const labels = { WAITING: '예약 대기', QUEUED: '실행 대기', RUNNING: '채점 중', STOPPED: '중단됨', DONE: '완료' };
-        const canDelete = ['WAITING', 'QUEUED', 'STOPPED', 'DONE'].indexOf(job.status) >= 0;
-        const deleteLabel = job.status === 'DONE' ? '목록에서 제거' : '예약 삭제';
-        return '<div class="job"><div class="job-title">' + escapeHtml(job.assignmentTitle) + '</div><div class="job-meta">' + escapeHtml(job.courseName) + ' · ' + progress + ' · ' + escapeHtml(labels[job.status] || job.status) + '</div><div class="job-meta">정답지: ' + escapeHtml(job.answerKeyName || '정보 없음') + '</div><div class="job-meta">모델: ' + escapeHtml(job.model || '알 수 없음') + '</div>' + (job.errors ? '<div class="job-meta" style="color:#b3261e">오류 ' + escapeHtml(job.errors) + '건</div>' : '') + (job.error ? '<div class="job-meta" style="color:#b3261e">' + escapeHtml(job.error) + '</div>' : '') + (canDelete ? '<button type="button" class="secondary delete-job" data-job-id="' + escapeHtml(job.jobId) + '">' + deleteLabel + '</button>' : '') + '</div>';
+        const labels = { WAITING: '예약 대기', QUEUED: '실행 대기', RUNNING: '채점 중', STOPPED: '중단됨', DONE: '완료', ERROR: '실패' };
+        const canDelete = ['WAITING', 'QUEUED', 'STOPPED', 'DONE', 'ERROR'].indexOf(job.status) >= 0;
+        const deleteLabel = isFinishedOrFailedStatus(job.status) ? '목록에서 제거' : '예약 삭제';
+        return '<div class="job">' +
+          '<div class="job-title">' + escapeHtml(job.assignmentTitle) + '</div>' +
+          '<div class="job-meta">' + escapeHtml(job.courseName) + ' · ' + progress + ' · ' + escapeHtml(labels[job.status] || job.status) + '</div>' +
+          '<div class="job-meta">정답지: ' + escapeHtml(job.answerKeyName || '정보 없음') + ' · 모델: ' + escapeHtml(job.model || '알 수 없음') + '</div>' +
+          (job.resultSheetName ? '<div class="job-meta">결과 시트: ' + escapeHtml(job.resultSheetName) + '</div>' : '') +
+          (job.errors ? '<div class="job-meta" style="color:#b3261e">오류 ' + escapeHtml(job.errors) + '건</div>' : '') +
+          (job.error ? '<div class="job-meta" style="color:#b3261e">' + escapeHtml(job.error) + '</div>' : '') +
+          (canDelete ? '<button type="button" class="secondary delete-job" data-job-id="' + escapeHtml(job.jobId) + '">' + deleteLabel + '</button>' : '') +
+          '</div>';
       }).join('');
       $('jobs').querySelectorAll('.delete-job').forEach((button) => button.addEventListener('click', deleteJob));
     }
@@ -355,12 +487,15 @@
       const button = event.currentTarget;
       if (!confirm('이 작업을 큐 목록에서 삭제할까요?')) return;
       button.disabled = true;
+      isQueueActionBusy = true;
       try {
         renderJobs(await call('deleteQueuedJob', button.dataset.jobId));
         showMessage('작업을 삭제했습니다.');
       } catch (error) {
         showMessage(error.message || String(error), true);
         button.disabled = false;
+      } finally {
+        isQueueActionBusy = false;
       }
     }
 
@@ -372,6 +507,7 @@
       try {
         const init = await call('getInitialData');
         data = Object.assign(data, init);
+        renderPresets();
         updateApiKeyBadge(data.hasApiKey);
         $('apiFormat').value = data.settings.apiFormat || 'chat_completions';
         $('baseUrl').value = data.settings.baseUrl || '';
@@ -392,18 +528,84 @@
             ? (data.models && data.models.length
               ? ('설정이 준비되었습니다 (' + data.models.length + '개 모델 조회됨).')
               : '설정이 준비되었습니다. [불러오기]로 모델 목록을 조회하거나 모델 ID를 입력하세요.')
-            : 'API 규격을 선택하고 API 키를 입력해 주세요.');
+            : '설정 시트 프리셋을 선택하거나 API 규격 및 API 키를 입력해 주세요.');
         showMessage(loadMessage, Boolean(data.errors && data.errors.length) || !data.hasApiKey);
       } catch (error) {
         showMessage(error.message || String(error), true);
       }
     }
 
+    $('presetSelect').addEventListener('change', async () => {
+      updatePresetHint();
+      const presetId = $('presetSelect').value;
+      if (!presetId) {
+        if (data.settings) data.settings.activePresetId = '';
+        updateApiKeyBadge(data.hasApiKey);
+        return;
+      }
+      $('presetSelect').disabled = true;
+      showMessage('선택한 프리셋 설정과 모델 목록을 불러오는 중입니다...');
+      try {
+        const res = await call('applyConfigPreset', presetId);
+        if (res && res.settings) {
+          data.settings = res.settings;
+          $('apiFormat').value = res.settings.apiFormat || 'chat_completions';
+          $('baseUrl').value = res.settings.baseUrl || '';
+          $('model').value = res.settings.model || '';
+          updateApiFormatHint(false);
+        }
+        data.models = (res && Array.isArray(res.models)) ? res.models : [];
+        updateApiKeyBadge(res && res.hasApiKey);
+        renderModels();
+        if (res && res.modelWarning) {
+          showMessage('프리셋(' + (res.preset ? res.preset.name : presetId) + ')을 적용했습니다. 단, 모델 자동 조회 실패: ' + res.modelWarning, true);
+        } else if (res && res.hasApiKey) {
+          showMessage('프리셋(' + (res.preset ? res.preset.name : presetId) + ')을 적용하고 ' + data.models.length + '개 모델을 불러왔습니다.');
+        } else {
+          showMessage('프리셋(' + (res.preset ? res.preset.name : presetId) + ') URL을 적용했습니다. 설정 시트 또는 입력창에 API 키를 입력해 주세요.', true);
+        }
+      } catch (error) {
+        showMessage(error.message || String(error), true);
+      } finally {
+        $('presetSelect').disabled = false;
+      }
+    });
+
+    $('refreshPresets').addEventListener('click', async () => {
+      $('refreshPresets').disabled = true;
+      try {
+        data.presets = await call('listConfigPresets', true);
+        renderPresets();
+        showMessage('설정 시트에서 ' + (data.presets || []).length + '개의 프리셋을 불러왔습니다.');
+      } catch (error) {
+        showMessage(error.message || String(error), true);
+      } finally {
+        $('refreshPresets').disabled = false;
+      }
+    });
+
+    $('openConfigSheet').addEventListener('click', async () => {
+      $('openConfigSheet').disabled = true;
+      try {
+        const res = await call('openConfigSheet');
+        if (res && Array.isArray(res.presets)) {
+          data.presets = res.presets;
+          renderPresets();
+        }
+        showMessage('스프레드시트에서 [' + ((res && res.sheetName) || 'AI채점_설정') + '] 시트를 열었습니다. URL과 API Key 입력 후 [새로고침]을 누르세요.');
+      } catch (error) {
+        showMessage(error.message || String(error), true);
+      } finally {
+        $('openConfigSheet').disabled = false;
+      }
+    });
+
     $('saveSettings').addEventListener('click', async () => {
       $('saveSettings').disabled = true;
       const hadKeyInput = Boolean($('apiKey').value.trim());
       try {
         const res = await call('saveSettings', {
+          presetId: $('presetSelect').value,
           baseUrl: $('baseUrl').value,
           apiFormat: $('apiFormat').value,
           apiKey: $('apiKey').value,
@@ -438,6 +640,8 @@
       try {
         await call('clearApiKey');
         $('apiKey').value = '';
+        $('presetSelect').value = '';
+        updatePresetHint();
         data.models = [];
         updateApiKeyBadge(false);
         renderModels();
@@ -469,7 +673,9 @@
       data.confirmedAssignmentId = data.pendingAssignment.id;
       $('confirmAssignment').disabled = true;
       $('assignmentSelection').className = 'status success';
-      $('assignmentSelection').textContent = '확정된 과제: ' + data.pendingAssignment.title + ' (제출물 ' + data.pendingAssignment.docCount + '건)';
+      const names = data.pendingAssignment.studentNames || [];
+      const preview = names.slice(0, 4).join(', ') + (names.length > 4 ? (' 외 ' + (names.length - 4) + '명') : '');
+      $('assignmentSelection').textContent = '확정된 과제: ' + data.pendingAssignment.title + ' (제출물 ' + data.pendingAssignment.docCount + '건 · 학생: ' + preview + ')';
       showMessage('과제 폴더를 확정했습니다. 정답지를 선택해 주세요.');
     });
     $('start').addEventListener('click', async () => {
@@ -480,23 +686,17 @@
       if (!$('answerKey').value) return showMessage('정답지 Google Docs를 선택해 주세요.', true);
       if (!$('model').value.trim()) return showMessage('사용할 AI 모델을 선택하거나 모델 ID를 입력해 주세요.', true);
       $('start').disabled = true;
-      showMessage('제출물 목록을 읽고 예약 큐에 추가하는 중입니다...');
+      isQueueActionBusy = true;
+      showMessage('제출물 목록을 정제하고 예약 큐에 추가하는 중입니다...');
       try {
-        const saved = await call('saveSettings', {
-          baseUrl: $('baseUrl').value,
-          apiFormat: $('apiFormat').value,
-          apiKey: $('apiKey').value,
-          model: $('model').value,
-          gradingMode: $('gradingMode').value,
-          maxScore: $('maxScore').value,
-          maxOutputTokens: $('maxOutputTokens').value,
-          aiUseDetection: $('aiUseDetection').checked
-        });
-        $('apiKey').value = '';
-        updateApiKeyBadge(saved && saved.hasApiKey);
         const jobs = await call('createJobs', {
+          presetId: $('presetSelect').value,
+          apiKey: $('apiKey').value,
           assignmentFolderId: assignmentFolder.folderId,
           assignmentFolderName: assignmentFolder.folderName,
+          courseName: (data.pendingAssignment && data.pendingAssignment.courseName) || getCourseNameFromBreadcrumbs(assignmentFolder.breadcrumbs),
+          breadcrumbs: assignmentFolder.breadcrumbs || [],
+          folderFiles: assignmentFolder.files || [],
           answerKeyId: $('answerKey').value,
           baseUrl: $('baseUrl').value,
           apiFormat: $('apiFormat').value,
@@ -506,16 +706,24 @@
           aiUseDetection: $('aiUseDetection').checked,
           model: $('model').value.trim()
         });
+        if ($('apiKey').value.trim()) {
+          $('apiKey').value = '';
+          updateApiKeyBadge(true);
+        }
         renderJobs(jobs);
-        showMessage('예약 큐에 추가했습니다. 아래 [예약 큐 전체 실행]을 누르면 채점이 시작됩니다.');
+        const newestJob = Array.isArray(jobs) && jobs[0];
+        const sheetInfo = newestJob && newestJob.resultSheetName ? (' (결과 시트: ' + newestJob.resultSheetName + ')') : '';
+        showMessage('예약 큐에 추가했습니다' + sheetInfo + '. 아래 [예약 큐 전체 실행]을 누르면 채점이 시작됩니다.');
       } catch (error) {
         showMessage(error.message || String(error), true);
       } finally {
         $('start').disabled = false;
+        isQueueActionBusy = false;
       }
     });
     $('runAll').addEventListener('click', async () => {
       $('runAll').disabled = true;
+      isQueueActionBusy = true;
       showMessage('예약 큐의 모든 작업을 실행합니다...');
       queueStatusRequestId += 1;
       try {
@@ -527,11 +735,11 @@
         showMessage(error.message || String(error), true);
       } finally {
         $('runAll').disabled = false;
+        isQueueActionBusy = false;
       }
     });
     $('refreshJobs').addEventListener('click', async () => {
       $('refreshJobs').disabled = true;
-      showMessage('예약 큐 상태를 새로고침합니다...');
       try {
         await refreshQueueStatus();
         showMessage('예약 큐 상태를 새로고침했습니다.');
@@ -541,8 +749,29 @@
         $('refreshJobs').disabled = false;
       }
     });
+    $('clearFinishedJobs').addEventListener('click', async () => {
+      const finishedCount = (data.jobs || []).filter((job) => isFinishedOrFailedStatus(job.status)).length;
+      if (!finishedCount) return;
+      if (!confirm('완료 또는 실패/중단 상태인 작업 ' + finishedCount + '건을 목록에서 일괄 삭제할까요? (생성된 결과 시트는 삭제되지 않습니다.)')) return;
+      $('clearFinishedJobs').disabled = true;
+      isQueueActionBusy = true;
+      showMessage('완료/실패 작업 목록을 정리하는 중입니다...');
+      try {
+        const res = await call('clearFinishedJobs');
+        const nextJobs = (res && Array.isArray(res.jobs)) ? res.jobs : [];
+        const deletedCount = (res && typeof res.deletedCount === 'number') ? res.deletedCount : finishedCount;
+        queueStatusRequestId += 1;
+        renderJobs(nextJobs);
+        showMessage('완료/실패 작업 ' + deletedCount + '건을 목록에서 삭제했습니다.');
+      } catch (error) {
+        showMessage(error.message || String(error), true);
+        renderJobs(data.jobs);
+      } finally {
+        isQueueActionBusy = false;
+      }
+    });
     setInterval(async () => {
-      if (document.hidden) return;
+      if (document.hidden || isQueueActionBusy) return;
       try { await refreshQueueStatus(); } catch (ignored) {}
     }, 10000);
     load();
