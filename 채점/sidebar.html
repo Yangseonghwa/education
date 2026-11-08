@@ -71,19 +71,20 @@
       <option value="chat_completions">OpenAI 호환 · Chat Completions</option>
       <option value="responses">OpenAI · Responses</option>
       <option value="claude">Claude · Messages</option>
+      <option value="gemini">Google(Gemini)</option>
     </select>
     <label for="baseUrl">Base URL</label>
     <input id="baseUrl" type="url" placeholder="https://api.openai.com/v1">
     <div id="apiFormatHint" class="subtle"></div>
     <label for="apiKey">API 키</label>
     <input id="apiKey" type="password" placeholder="API 키를 입력하세요. 저장된 키는 다시 표시하지 않습니다.">
-    <label for="modelSelect">모델 선택</label>
+    <label for="modelSelect">모델 선택 (API 키로 실시간 조회)</label>
     <div class="row model-row">
-      <select id="modelSelect"><option value="">모델 목록을 불러오세요.</option></select>
+      <select id="modelSelect"><option value="">API 키를 입력하고 [불러오기]를 누르세요.</option></select>
       <button type="button" class="secondary" id="refreshModels">불러오기</button>
     </div>
     <label for="model">모델 ID 직접 입력</label>
-    <input id="model" type="text" placeholder="예: gpt-4o-mini, claude-3-5-sonnet-latest">
+    <input id="model" type="text" placeholder="예: gemini-2.5-flash, gpt-4o-mini, claude-3-5-sonnet-latest">
     <div class="subtle">API 일시 오류 코드는 10분 간격으로 최대 5회 재시도합니다. 크레딧 부족·소진 응답이면 중단합니다.</div>
     <div class="row">
       <button type="button" class="secondary" id="saveSettings">설정 저장</button>
@@ -132,6 +133,30 @@
 
   <script>
     const $ = (id) => document.getElementById(id);
+    const FORMAT_META = {
+      chat_completions: {
+        defaultBaseUrl: 'https://api.openai.com/v1',
+        placeholder: 'https://api.openai.com/v1',
+        hint: '요청 경로: /chat/completions · 모델 조회: /models · 인증: Bearer API 키'
+      },
+      responses: {
+        defaultBaseUrl: 'https://api.openai.com/v1',
+        placeholder: 'https://api.openai.com/v1',
+        hint: '요청 경로: /responses · 모델 조회: /models · 인증: Bearer API 키'
+      },
+      claude: {
+        defaultBaseUrl: 'https://api.anthropic.com/v1',
+        placeholder: 'https://api.anthropic.com/v1',
+        hint: '요청 경로: /messages · 모델 조회: /models · 인증: x-api-key 및 anthropic-version'
+      },
+      gemini: {
+        defaultBaseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        placeholder: 'https://generativelanguage.googleapis.com/v1beta',
+        hint: '요청 경로: /models/{model}:generateContent (또는 /v1beta/openai) · 모델 조회: /models · 인증: x-goog-api-key'
+      }
+    };
+    const KNOWN_DEFAULT_URLS = Object.keys(FORMAT_META).map((k) => FORMAT_META[k].defaultBaseUrl);
+
     let data = {
       hasApiKey: false,
       pendingAssignment: null,
@@ -170,32 +195,54 @@
       $('clearApiKey').disabled = !data.hasApiKey;
     }
 
-    function updateApiFormatHint() {
-      const formats = {
-        chat_completions: { placeholder: 'https://api.openai.com/v1', hint: '요청 경로: /chat/completions · 인증: Bearer API 키' },
-        responses: { placeholder: 'https://api.openai.com/v1', hint: '요청 경로: /responses · 인증: Bearer API 키' },
-        claude: { placeholder: 'https://api.anthropic.com/v1', hint: '요청 경로: /messages · 인증: x-api-key 및 anthropic-version' }
-      };
-      const selected = formats[$('apiFormat').value] || formats.chat_completions;
+    function updateApiFormatHint(autoSwitchDefaultUrl) {
+      const format = $('apiFormat').value;
+      const selected = FORMAT_META[format] || FORMAT_META.chat_completions;
       $('baseUrl').placeholder = selected.placeholder;
       $('apiFormatHint').textContent = selected.hint;
+      const currentUrl = $('baseUrl').value.trim().replace(/\/+$/, '');
+      if (!currentUrl || (autoSwitchDefaultUrl && KNOWN_DEFAULT_URLS.indexOf(currentUrl) >= 0)) {
+        $('baseUrl').value = selected.defaultBaseUrl;
+      }
     }
 
     function renderModels() {
-      const selected = $('model').value || data.settings.model || (data.models[0] && data.models[0].id) || '';
       const models = (data.models || []).slice();
-      if (selected && !models.some((model) => model.id === selected)) models.push({ id: selected, label: selected });
-      $('modelSelect').innerHTML = '<option value="">모델을 선택하세요.</option>' + models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.label) + '</option>').join('');
+      const selected = $('model').value.trim() || data.settings.model || (models[0] && models[0].id) || '';
+      if (!models.length && !selected) {
+        $('modelSelect').innerHTML = '<option value="">API 키를 입력하고 [불러오기]를 누르세요.</option>';
+        $('modelSelect').value = '';
+        return;
+      }
+      if (selected && !models.some((model) => model.id === selected)) {
+        models.unshift({ id: selected, label: selected + ' (현재 설정)' });
+      }
+      $('modelSelect').innerHTML = '<option value="">모델을 선택하세요 (' + models.length + '개).</option>' +
+        models.map((model) => '<option value="' + escapeHtml(model.id) + '">' + escapeHtml(model.label) + '</option>').join('');
       $('modelSelect').value = selected;
       $('model').value = selected;
     }
 
     async function loadModels() {
+      const enteredKey = $('apiKey').value.trim();
+      if (!enteredKey && !data.hasApiKey) {
+        showMessage('모델 목록을 조회하려면 API 키를 입력하거나 먼저 저장해 주세요.', true);
+        return;
+      }
       $('refreshModels').disabled = true;
+      showMessage('선택한 API 규격에서 사용 가능한 모델 목록을 불러오는 중입니다...');
       try {
-        data.models = await call('listAvailableModels', $('baseUrl').value, $('apiFormat').value);
+        const fetched = await call('listAvailableModels', $('baseUrl').value, $('apiFormat').value, enteredKey);
+        if (enteredKey) {
+          $('apiKey').value = '';
+          updateApiKeyBadge(true);
+        }
+        data.models = Array.isArray(fetched) ? fetched : [];
+        if (data.models.length && (!($('model').value.trim()) || !data.models.some((m) => m.id === $('model').value.trim()))) {
+          $('model').value = data.models[0].id;
+        }
         renderModels();
-        showMessage(data.models.length + '개 모델을 불러왔습니다.');
+        showMessage(data.models.length + '개의 사용 가능한 모델을 동적으로 불러왔습니다.');
       } catch (error) {
         showMessage((error.message || String(error)) + ' 모델 ID를 직접 입력해 사용할 수 있습니다.', true);
       } finally {
@@ -328,7 +375,8 @@
         updateApiKeyBadge(data.hasApiKey);
         $('apiFormat').value = data.settings.apiFormat || 'chat_completions';
         $('baseUrl').value = data.settings.baseUrl || '';
-        updateApiFormatHint();
+        $('model').value = data.settings.model || '';
+        updateApiFormatHint(false);
         renderModels();
         renderDriveBrowser(data.classroomBrowser, 'assignment');
         renderDriveBrowser(data.answerKeyBrowser, 'answerKey');
@@ -337,11 +385,15 @@
         $('maxScore').value = data.settings.maxScore || 100;
         $('maxOutputTokens').value = data.settings.maxOutputTokens || 16384;
         $('aiUseDetection').checked = Boolean(data.settings.aiUseDetection);
-        const hasBaseUrl = Boolean(data.settings.baseUrl);
+        const hasBaseUrl = Boolean($('baseUrl').value.trim());
         const loadMessage = (data.errors && data.errors.length)
           ? data.errors.join('\n')
-          : (data.hasApiKey && hasBaseUrl ? '설정이 준비되었습니다.' : 'Base URL과 API 키를 입력해 주세요.');
-        showMessage(loadMessage, Boolean(data.errors && data.errors.length) || !data.hasApiKey || !hasBaseUrl);
+          : (data.hasApiKey && hasBaseUrl
+            ? (data.models && data.models.length
+              ? ('설정이 준비되었습니다 (' + data.models.length + '개 모델 조회됨).')
+              : '설정이 준비되었습니다. [불러오기]로 모델 목록을 조회하거나 모델 ID를 입력하세요.')
+            : 'API 규격을 선택하고 API 키를 입력해 주세요.');
+        showMessage(loadMessage, Boolean(data.errors && data.errors.length) || !data.hasApiKey);
       } catch (error) {
         showMessage(error.message || String(error), true);
       }
@@ -349,6 +401,7 @@
 
     $('saveSettings').addEventListener('click', async () => {
       $('saveSettings').disabled = true;
+      const hadKeyInput = Boolean($('apiKey').value.trim());
       try {
         const res = await call('saveSettings', {
           baseUrl: $('baseUrl').value,
@@ -362,11 +415,16 @@
         });
         $('apiKey').value = '';
         updateApiKeyBadge(res && res.hasApiKey);
+        if (res && res.settings) {
+          data.settings = res.settings;
+          $('baseUrl').value = res.settings.baseUrl || $('baseUrl').value;
+        }
         showMessage('설정을 저장했습니다.');
-        data.settings.baseUrl = $('baseUrl').value.trim().replace(/\/+$/, '');
-        data.settings.apiFormat = $('apiFormat').value;
-        data.settings.model = $('model').value;
-        renderModels();
+        if (hadKeyInput || (data.hasApiKey && (!data.models || !data.models.length))) {
+          await loadModels();
+        } else {
+          renderModels();
+        }
       } catch (error) {
         showMessage(error.message || String(error), true);
       } finally {
@@ -380,7 +438,9 @@
       try {
         await call('clearApiKey');
         $('apiKey').value = '';
+        data.models = [];
         updateApiKeyBadge(false);
+        renderModels();
         showMessage('저장된 API 키를 삭제했습니다.');
       } catch (error) {
         showMessage(error.message || String(error), true);
@@ -388,13 +448,20 @@
       }
     });
 
-    $('apiFormat').addEventListener('change', updateApiFormatHint);
+    $('apiFormat').addEventListener('change', () => {
+      updateApiFormatHint(true);
+      data.models = [];
+      renderModels();
+      if ($('apiKey').value.trim() || data.hasApiKey) {
+        loadModels();
+      }
+    });
     $('refreshModels').addEventListener('click', loadModels);
     $('modelSelect').addEventListener('change', () => {
       if ($('modelSelect').value) $('model').value = $('modelSelect').value;
     });
     $('model').addEventListener('input', () => {
-      const modelId = $('model').value;
+      const modelId = $('model').value.trim();
       $('modelSelect').value = Array.from($('modelSelect').options).some((option) => option.value === modelId) ? modelId : '';
     });
     $('confirmAssignment').addEventListener('click', () => {
@@ -411,6 +478,7 @@
       const assignmentFolder = data.assignmentBrowser;
       if (!assignmentFolder || !assignmentFolder.folderId || assignmentFolder.folderId === 'root') return showMessage('과제 폴더를 선택해 주세요.', true);
       if (!$('answerKey').value) return showMessage('정답지 Google Docs를 선택해 주세요.', true);
+      if (!$('model').value.trim()) return showMessage('사용할 AI 모델을 선택하거나 모델 ID를 입력해 주세요.', true);
       $('start').disabled = true;
       showMessage('제출물 목록을 읽고 예약 큐에 추가하는 중입니다...');
       try {
@@ -436,7 +504,7 @@
           maxScore: $('maxScore').value,
           maxOutputTokens: $('maxOutputTokens').value,
           aiUseDetection: $('aiUseDetection').checked,
-          model: $('model').value
+          model: $('model').value.trim()
         });
         renderJobs(jobs);
         showMessage('예약 큐에 추가했습니다. 아래 [예약 큐 전체 실행]을 누르면 채점이 시작됩니다.');
