@@ -1,0 +1,508 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="중학교 과학 수업을 위한 Gemini Notebook 인터랙티브 시나리오·스튜디오 프리젠테이션·마무리 학습지·성향 누적 통합 지침 v3.0 안내문">
+<title>중학교 과학 AI 수업설계 v3.0 | Gemini Notebook 스튜디오 통합 가이드</title>
+<style>
+:root{--bg:#f3f6fb;--paper:#ffffff;--ink:#142136;--muted:#526277;--line:#d8e1ee;--brand:#1b56b3;--brand-dark:#123d82;--accent:#0f8a6f;--accent-soft:#e6f6f2;--warn:#d97706;--warn-soft:#fff7ed;--soft:#eaf2ff;--radius:18px}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth;scroll-padding-top:84px}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Pretendard',system-ui,-apple-system,'Noto Sans KR','Malgun Gothic',sans-serif;line-height:1.78;word-break:keep-all}
+a{color:var(--brand)}
+button,input{font:inherit}
+button{cursor:pointer}
+button:focus-visible,a:focus-visible,input:focus-visible,summary:focus-visible{outline:3px solid #e69c25;outline-offset:3px}
+.topbar{position:sticky;top:0;z-index:10;background:#ffffffeb;backdrop-filter:blur(12px);border-bottom:1px solid var(--line);padding:12px 5%;display:flex;justify-content:space-between;align-items:center;gap:14px}
+.logo{font-weight:800;letter-spacing:-.4px;display:flex;align-items:center;gap:8px}
+.logo-badge{background:var(--brand);color:#fff;font-size:.74rem;padding:2px 8px;border-radius:20px}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.mini,.copy{border:1px solid var(--line);background:#fff;color:var(--brand);border-radius:8px;padding:5px 12px;font-size:.84rem;font-weight:600;transition:.15s}
+.mini:hover,.copy:hover{background:var(--soft);border-color:var(--brand)}
+.hero{max-width:1200px;margin:auto;padding:56px 26px 32px}
+.eyebrow{font-size:.8rem;font-weight:800;color:var(--brand);letter-spacing:1px;margin-bottom:8px;text-transform:uppercase}
+h1{font-size:clamp(1.9rem,4.3vw,3.1rem);line-height:1.28;letter-spacing:-1.2px;max-width:960px;margin:10px 0 18px}
+h2{font-size:1.68rem;line-height:1.4;letter-spacing:-.6px;margin:0 0 14px}
+h3{font-size:1.06rem;line-height:1.5;margin:14px 0 8px}
+p{margin:8px 0 14px}
+.hero p{font-size:1.08rem;max-width:880px;color:var(--muted)}
+.badges{display:flex;flex-wrap:wrap;gap:8px;margin:20px 0}
+.badges span,.tag{display:inline-block;background:var(--soft);color:var(--brand);border-radius:30px;padding:5px 13px;font-size:.82rem;font-weight:700}
+.tag.green{background:var(--accent-soft);color:var(--accent)}
+.tag.warn{background:var(--warn-soft);color:var(--warn)}
+.layout{display:grid;grid-template-columns:225px minmax(0,1fr);gap:26px;max-width:1200px;padding:0 26px 60px;margin:auto}
+.sidebar{align-self:start;position:sticky;top:84px;padding:14px;background:var(--paper);border:1px solid var(--line);border-radius:14px}
+.sidebar a{display:block;text-decoration:none;color:var(--muted);font-size:.9rem;border-radius:8px;padding:7px 11px;font-weight:500}
+.sidebar a:hover{background:var(--soft);color:var(--brand);font-weight:700}
+main{min-width:0}
+section{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:30px;margin-bottom:24px;box-shadow:0 2px 10px rgba(20,33,54,.03)}
+.lead{color:var(--muted);font-size:1.01rem}
+.cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:20px 0}
+.cards.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.cards article{padding:18px;border:1px solid var(--line);border-radius:13px;min-width:0;background:#fcfdff}
+.cards p{font-size:.92rem;color:var(--muted)}
+.num{font-size:1.5rem;font-weight:800;color:#8fb0e8}
+.note,.warning,.success{padding:16px 20px;border-radius:12px;margin:20px 0 8px;background:#edf4ff;border-left:4px solid #3b76d6}
+.warning{background:#fff7eb;border-color:#e09a2b}
+.success{background:var(--accent-soft);border-color:var(--accent)}
+.note h3,.warning h3,.success h3{margin-top:0}
+.note p,.warning p,.success p{font-size:.94rem;margin-bottom:0}
+.tablewrap{overflow:auto;margin:16px 0;border:1px solid var(--line);border-radius:12px}
+table{border-collapse:collapse;width:100%;font-size:.89rem}
+th,td{text-align:left;padding:12px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+th{background:#f0f5fc;font-size:.84rem;font-weight:700;color:#1e3557}
+td code{font-size:.84rem;white-space:nowrap}
+code{background:#eaf0f8;color:#1d4273;padding:2px 6px;border-radius:5px;font-family:ui-monospace,'JetBrains Mono','Malgun Gothic',monospace}
+.downloads{display:flex;gap:10px;flex-wrap:wrap;margin:20px 0 10px}
+.button{border:1px solid var(--brand);background:var(--brand);color:white;padding:11px 18px;border-radius:10px;font-weight:700;font-size:.92rem;text-decoration:none;display:inline-flex;align-items:center;gap:6px}
+.button:hover{background:var(--brand-dark)}
+.button.secondary{background:white;color:var(--brand)}
+.button.secondary:hover{background:var(--soft)}
+.button.accent{background:var(--accent);border-color:var(--accent)}
+.small{font-size:.84rem;color:var(--muted)}
+.steps{list-style:none;counter-reset:step;padding:0}
+.steps>li{counter-increment:step;position:relative;padding:8px 0 22px 48px;border-bottom:1px dashed var(--line)}
+.steps>li:last-child{border-bottom:0;padding-bottom:4px}
+.steps>li:before{content:counter(step);position:absolute;left:0;top:14px;width:32px;height:32px;border-radius:50%;background:var(--brand);color:white;text-align:center;line-height:32px;font-weight:800}
+.codebox{position:relative;margin:12px 0;border:1px solid #d2dfef;background:#f5f8fd;border-radius:12px;overflow:hidden}
+.codebox .copy{position:absolute;right:10px;top:9px;z-index:2}
+.codebox pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:normal;margin:0;padding:44px 16px 16px;font-size:.85rem;line-height:1.78;font-family:ui-monospace,'JetBrains Mono','Malgun Gothic',monospace}
+.flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:18px 0}
+.flow span{background:var(--soft);color:var(--brand-dark);padding:8px 13px;border-radius:9px;font-size:.84rem;font-weight:700;border:1px solid #cfe0fb}
+.flow span.studio{background:var(--accent-soft);color:var(--accent);border-color:#b5e5d8}
+.flow i{font-style:normal;color:#8796ab;font-weight:700}
+.timeline article{border-left:3px solid #b9d0f5;padding:0 0 22px 20px;margin-left:4px}
+.timeline article:last-child{padding-bottom:0}
+.plain{padding-left:22px}
+.plain li{padding:4px 0}
+.searchlabel{display:block;font-size:.9rem;font-weight:700;margin-top:16px}
+input[type=search]{width:100%;border:1px solid var(--line);background:#fff;padding:11px 14px;border-radius:9px;margin:6px 0}
+details{border:1px solid var(--line);border-radius:11px;padding:0 17px;margin:12px 0;background:#fcfdff}
+summary{cursor:pointer;padding:14px 0;font-weight:700;line-height:1.6}
+details[open]{padding-bottom:14px}
+details p{font-size:.94rem}
+.checks{display:grid;gap:10px}
+.checks label{display:flex;align-items:flex-start;gap:10px;font-size:.94rem;cursor:pointer}
+.checks input{margin-top:6px;width:17px;height:17px;flex-shrink:0;accent-color:var(--brand)}
+footer{max-width:1200px;margin:auto;padding:0 26px 44px;color:var(--muted);font-size:.85rem}
+.toast{position:fixed;bottom:25px;left:50%;transform:translateX(-50%);background:#142136;color:white;padding:10px 22px;border-radius:30px;z-index:20;box-shadow:0 5px 24px #14213635;font-weight:600;font-size:.9rem}
+@media(max-width:1020px){.layout{grid-template-columns:180px minmax(0,1fr);gap:16px}.cards,.cards.two{grid-template-columns:1fr}}
+@media(max-width:760px){.layout{display:block;padding:0 16px 30px}.sidebar{position:static;display:flex;flex-wrap:wrap;gap:4px;padding:10px;margin-bottom:16px}.sidebar a{border:1px solid var(--line);background:white;padding:5px 10px;font-size:.8rem}.hero{padding:34px 18px 24px}section{padding:22px 18px}h2{font-size:1.45rem}.button{width:100%;justify-content:center}}
+@media print{body{background:white;font-size:10pt}.topbar,.sidebar,.copy,.mini,.downloads,.actions,#commandSearch,.searchlabel,.toast,.checks input{display:none!important}.layout{display:block;padding:0;max-width:none}section{border:0;border-radius:0;padding:14px 0;margin:0;border-top:1px solid #ddd;box-shadow:none}}
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="logo">
+    <span>🔬 중학교 과학 교사 주도 AI 수업설계</span>
+    <span class="logo-badge">v3.0 Studio Edition</span>
+  </div>
+  <div class="actions">
+    <a class="mini" href="./00_최우선지침_중학교과학_수업설계통합지침_v3.0.md" download>최우선지침 v3.0 (.md)</a>
+    <a class="mini" href="./Gemini_Notebook_맞춤설정_중학교과학_고정운영명령_v3.md" download>맞춤설정 v3.0 (.md)</a>
+    <a class="mini" href="./프리젠테이션_제작방식_비교분석_및_최적워크플로우_설계서.md" download>비교분석·설계서 (.md)</a>
+    <button class="mini" id="printBtn">인쇄 / PDF</button>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="eyebrow">GEMINI NOTEBOOK · MIDDLE SCHOOL SCIENCE WORKFLOW v3.0</div>
+  <h1>인터랙티브 시나리오부터 스튜디오 프리젠테이션,<br>마무리 학습지와 교사 성향 누적까지</h1>
+  <p>교육 계정 Gemini 슬라이드(3.6 Flash)의 부분 편집 장점과 <b>Gemini Notebook 스튜디오(Slide Deck)</b>의 압도적인 과학 모형·비주얼 품질을 결합한 중학교 과학 전용 수업설계 시스템입니다.</p>
+  <div class="badges">
+    <span>중학교 1·2·3학년 과학 특화</span>
+    <span>스튜디오 Slide Deck + 3.6 Flash 하이브리드</span>
+    <span>인터랙티브 A/B/C &amp; 블록 조립</span>
+    <span>교사 성향 3계층 누적·자가진화</span>
+  </div>
+  <div class="downloads">
+    <a class="button" href="./00_최우선지침_중학교과학_수업설계통합지침_v3.0.md" download>📥 00_최우선지침_중학교과학_v3.0.md 받기</a>
+    <a class="button secondary" href="./Gemini_Notebook_맞춤설정_중학교과학_고정운영명령_v3.md" download>📥 Gemini_Notebook_맞춤설정_v3.md 받기</a>
+    <a class="button accent" href="./프리젠테이션_제작방식_비교분석_및_최적워크플로우_설계서.md" download>📊 스튜디오 vs 슬라이드 비교분석서 받기</a>
+  </div>
+</div>
+
+<div class="layout">
+  <nav class="sidebar" aria-label="안내문 목차">
+    <a href="#decision">1. 스튜디오 vs 슬라이드</a>
+    <a href="#science-flow">2. 중학 과학 5단계 흐름</a>
+    <a href="#setup">3. 처음 설정 (맞춤설정)</a>
+    <a href="#workflow">4. 실전 수업 제작 절차</a>
+    <a href="#studio-secret">5. 스튜디오·부분편집 비결</a>
+    <a href="#accumulation">6. 성향 누적·지침 개선</a>
+    <a href="#commands">7. 명령어 사전</a>
+    <a href="#checklist">8. 실전 체크리스트</a>
+  </nav>
+
+  <main id="main">
+    <section id="decision">
+      <div class="eyebrow">핵심 고민 해결 · 의사결정</div>
+      <h2>왜 ‘스튜디오 메인(85%) + 부분 편집 보완(15%)’이 정답인가요?</h2>
+      <p class="lead">교육 계정에서 Gemini(3.6 Flash)로 슬라이드를 만들면 텍스트 박스 부분 편집은 쉽지만 시각 자료가 단조롭고, Gemini Notebook 스튜디오(Slide Deck)는 이미지·다이어그램 품질이 뛰어나지만 이미지 렌더링 기반이라 글자 단위 수정과 교사 의도 통제가 까다롭습니다. <b>v3.0 지침은 두 방식의 장점만 결합했습니다.</b></p>
+
+      <div class="tablewrap">
+        <table>
+          <thead>
+            <tr>
+              <th>비교 기준</th>
+              <th>Gemini Notebook 스튜디오 (Slide Deck)</th>
+              <th>교육 계정 Gemini 슬라이드 (3.6 Flash)</th>
+              <th>v3.0 통합 지침의 해결 전략</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><b>시각·과학 모형 품질</b></td>
+              <td><b>최상</b> (Nano Banana Pro 기반 인포그래픽·입자/힘/회로 모형 시각화)</td>
+              <td><b>보통~낮음</b> (텍스트 개조식 위주, 과학 삽화는 교사가 따로 찾아야 함)</td>
+              <td><b>스튜디오를 주력(Primary) 엔진으로 채택</b>하여 중학생 시각 몰입도 극대화</td>
+            </tr>
+            <tr>
+              <td><b>교사 시나리오 의도 반영</b></td>
+              <td>교과서만 체크하고 생성하면 AI가 멋대로 백과사전식 요약을 함</td>
+              <td>프롬프트 전달 과정에서 세부 맥락이 일부 생략됨</td>
+              <td>채팅에서 확정한 슬라이드 설계안을 <b>[노트→소스로 변환]해 고정</b>하고 스튜디오 마스터 프롬프트로 통제</td>
+            </tr>
+            <tr>
+              <td><b>한글 텍스트 깨짐</b></td>
+              <td>글자가 많거나 복잡한 표를 넣으면 이미지 내 한글 깨짐 발생 가능</td>
+              <td>시스템 폰트 기반이라 글자 깨짐 없음</td>
+              <td><b>1슬라이드 1메시지 · Text-Light 규칙</b>(제목 1줄 + 본문 3줄·줄당 25자 이내)으로 한글 깨짐 원천 차단</td>
+            </tr>
+            <tr>
+              <td><b>완성 후 부분 편집</b></td>
+              <td><code>Revise</code> 모드로 수정 가능하나, <b>수정 시 원본 소스를 다시 읽지 않음</b></td>
+              <td><b>최상</b> (마우스 클릭으로 텍스트·표 즉시 수정)</td>
+              <td>① 스튜디오 수정용 <b>자가 완결형 Revise 지시문</b>(<code>/프리젠테이션-부분수정</code>) 제공<br>② 실시간 표 입력 슬라이드만 <b>3.6 Flash 부분 패치</b>(<code>/슬라이드-플래시패치</code>)</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <aside class="success">
+        <h3>💡 핵심 결론: 채팅에서 설계·고정하고, 스튜디오로 그리고, 필요한 장만 패치합니다</h3>
+        <p>스튜디오에서 바로 ‘생성’ 버튼을 누르지 마세요. <b>채팅에서 인터랙티브 아웃라인으로 시나리오와 슬라이드 설계서(Blueprint)를 확정한 뒤 이를 소스로 고정</b>하면, 스튜디오의 고화질 비주얼 품질을 누리면서도 재수정(Revise) 횟수를 최소화할 수 있습니다.</p>
+      </aside>
+    </section>
+
+    <section id="science-flow">
+      <div class="eyebrow">중학교 과학 수업 철학</div>
+      <h2>모든 설계에 내재화된 ‘중학교 과학 5단계 인지 흐름’</h2>
+      <p>법칙이나 공식을 먼저 정의하고 외우게 하는 대신, 학생 머릿속에 <b>‘왜 이 개념이 필요한가’</b> 자리를 먼저 만들고 모형으로 추론한 뒤 현실로 돌아오는 흐름을 모든 A/B/C 대안에 기본 적용합니다.</p>
+
+      <div class="flow">
+        <span>① 전수업 연결 &amp; 왜 필요한가</span><i>→</i>
+        <span>② 복잡한 현실 현상 관찰</span><i>→</i>
+        <span class="studio">③ 핵심 특징 &amp; 단순화된 과학 모형</span><i>→</i>
+        <span class="studio">④ 학생 사고 · 탐구 · 적용</span><i>→</i>
+        <span>⑤ 현실 복귀 &amp; 마무리 학습지</span>
+      </div>
+
+      <div class="cards">
+        <article>
+          <span class="num">01</span>
+          <h3>개념의 필요성 (Need-to-Know)</h3>
+          <p>예: “샤를 법칙을 배웁시다” 대신 “찌그러진 탁구공을 뜨거운 물에 넣었더니 왜 펴질까? 보일 법칙만으로는 설명이 안 되네!”로 시작합니다.</p>
+        </article>
+        <article>
+          <span class="num">02</span>
+          <h3>현실 → 단순화된 과학 모형</h3>
+          <p>복잡한 현실에서 핵심 변인만 추출해 입자 화살표·전하 흐름·힘의 화살표 모형으로 단순화합니다. <b>비유를 쓸 때는 반드시 비유의 한계(오개념 주의)를 함께 표시</b>합니다.</p>
+        </article>
+        <article>
+          <span class="num">03</span>
+          <h3>현실 복귀 &amp; 생각의 변화</h3>
+          <p>모형으로 깨달은 원리를 다시 처음의 도입 질문과 실생활 현상에 적용하고, 마무리 학습지에서 ‘수업 전 생각 → 단서 → 수업 후 과학적 설명’으로 구조화합니다.</p>
+        </article>
+      </div>
+    </section>
+
+    <section id="setup">
+      <div class="eyebrow">처음 한 번 · 3분 세팅</div>
+      <h2>Gemini Notebook 초기 설정 순서</h2>
+      <ol class="steps">
+        <li>
+          <h3>교과서·지도서와 ‘최우선지침 v3.0’ 소스 추가</h3>
+          <p>노트북 소스에 교과서 PDF, 교사용 지도서 PDF, 그리고 <code>00_최우선지침_중학교과학_수업설계통합지침_v3.0.md</code>를 추가합니다. <b>(팁: 최우선지침을 Google Docs 문서로 만들어 Drive 소스로 연결해 두면 나중에 성향 누적 시 문서만 고치고 ‘동기화’ 버튼만 누르면 됩니다!)</b></p>
+        </li>
+        <li>
+          <h3>채팅 맞춤설정(Custom)에 고정 운영 명령 붙여넣기</h3>
+          <p>채팅 상단 설정 아이콘 → <code>Custom</code>에 아래 <b>표준형 블록</b>을 복사해 붙여 넣고 응답 길이를 <b>Longer</b>로 저장합니다. (이후 지침이 v3.1, v3.2로 올라가도 맞춤설정은 바꿀 필요가 없습니다.)</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">너는 교사 주도 '중학교 과학' 수업설계 파트너다. 매 응답 전에 선택된 소스에서 '00_최우선지침_'으로 시작하는 가장 높은 버전의 운영지침 문서를 찾아 규칙과 [2-C. 교사 성향 누적 프로필]을 확인·적용하라. 지침을 찾지 못하면 찾은 척하지 말고 소스 선택을 요청하라.
+[핵심 수업 철학] 개념 정의를 먼저 나열하지 말고 반드시 [①전수업 연결 및 '왜 이 개념이 필요한가'(필요성 자리 만들기) → ②복잡한 현실 현상 관찰 → ③핵심 특징 주목 및 단순화된 과학 모형(입자·화살표·비유 등, 비유의 한계·오개념 주의 병기) → ④학생 사고·탐구·적용 → ⑤현실 복귀 및 도입 질문 재방문]의 5단계 과학 인지 흐름으로 설계하라. 교과서·지도서(인쇄 쪽수 표시)는 내용 근거, 창작 아이디어는 '[교사 검토용 설계 제안]'으로 구분하라.
+[인터랙티브 절차] 신규 설계는 [필수 정보 확인 → 실질적으로 다른 A/B/C 비교표 + 구간별 블록 조립표(도입·모형·탐구·마무리) 제시 → 교사 선택·혼합·수정 → 단일 교사 구성 아웃라인 확인 → 명시적 아웃라인 승인 → 초안 생성] 순서를 지켜라. 단순 선택만으로 승인이라 간주하지 말고 승인 전 전체 대본·슬라이드·학습지 생성을 금지한다. 부분 수정 시 처음 절차를 반복하지 말고 한 응답에 시나리오·프리젠테이션·학습지 중 하나만 출력하라.
+[프리젠테이션 &amp; 학습지] 슬라이드는 확정 시나리오 기준으로 Gemini Notebook 스튜디오(Slide Deck) 제작에 최적화하여 [패키지1: 노트→소스 고정용 상세 설계서(한글 깨짐 방지용 1슬라이드 3줄·줄당 25자 이내 Text-Light 규칙 + 과학 모형 시각화 지시), 패키지2: 스튜디오 입력용 마스터 프롬프트, 패키지3: 원본 미참조 한계를 보완하는 자가 완결형 Revise 수정 지시문 및 Gemini 3.6 Flash 부분 패치 프롬프트]로 출력하라. 학습지는 [A.개념 흐름 빈칸+미니 모형 체크, B.적용 문항, C.과학적 생각의 변화, 교사용 별첨(AI 서술형 채점 기준표)]로 구성하라.
+[성향 누적·지침 개선] 교사 피드백은 [이번 수업만]과 [장기 성향 후보]로 구분해 장부에 기록하고 산출물 확정 시 관찰된 성향을 1줄로 확인하라. /성향스냅샷은 2-C 패치 블록을, /지침개선은 개정안 검토 후 승인 대기, /지침개선-확정은 생략 없는 차기 버전 최우선지침 전문을 출력하라.</pre>
+          </div>
+          <details>
+            <summary>글자 수 제한(500자 이내)이 엄격한 계정용 초압축 블록 보기</summary>
+            <div class="codebox">
+              <button class="copy" type="button">복사</button>
+              <pre tabindex="0">너는 교사 주도 중학교 과학 수업설계 파트너다. 응답 전 선택된 소스에서 '00_최우선지침_' 최신 문서를 찾아 규칙과 [2-C. 교사 성향 프로필]을 엄격히 적용하라(미확인 시 소스 선택 요청).
+모든 설계는 [①왜 필요한가(필요성)→②복잡한 현실 현상→③단순화된 과학 모형(비유 한계 병기)→④탐구·적용→⑤현실 복귀] 흐름을 따르며 교과서 인쇄 쪽수 근거와 창작 제안을 구분한다.
+신규 산출물은 [정보 확인→A/B/C 비교표+구간별 블록 조립표→교사 구성 아웃라인→명시적 승인→초안] 순서로 하나씩만 생성하며 승인 전 전체 생성을 금지한다.
+프리젠테이션은 스튜디오(Slide Deck) 직결 3종 패키지(노트→소스 설계서[3줄·25자 이내 Text-Light], 스튜디오 마스터 프롬프트, 자가 완결형 Revise 및 3.6 Flash 부분 패치)로, 학습지는 [빈칸+모형체크/적용문제/생각의 변화/AI 채점기준]으로 작성한다.
+피드백은 이번 수업용과 장기 성향 후보로 구분 기록하며 /성향스냅샷, /지침개선, /지침개선-확정 절차를 준수한다.</pre>
+            </div>
+          </details>
+        </li>
+        <li>
+          <h3>첫 메시지로 <code>/지침확인</code> 실행</h3>
+          <p>지침 소스가 체크된 상태에서 아래 명령을 입력해 v3.0 지침과 교사 프로필이 정상 로드되었는지 확인합니다.</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">/지침확인
+현행 지침의 버전과 중학교 과학 5단계 인지 흐름, 스튜디오 프리젠테이션 설계 원칙을 짧게 보고해줘.</pre>
+          </div>
+        </li>
+      </ol>
+    </section>
+
+    <section id="workflow">
+      <div class="eyebrow">실전 수업 설계</div>
+      <h2>인터랙티브 시나리오 → 스튜디오 프리젠테이션 → 마무리 학습지</h2>
+      <div class="timeline">
+        <article>
+          <h3>Step 1. 시나리오 아웃라인 탐색 및 레고 블록 조립 (<code>/시나리오</code>)</h3>
+          <p>교과서 인쇄 쪽수와 수업 조건을 주면 AI가 <b>A/B/C 3가지 설계안 비교표</b>와 함께 <b>구간별 블록 조립표(도입 1·2·3 / 모형화 1·2·3 / 탐구 1·2·3 / 마무리 1·2·3)</b>를 제시합니다.</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">/시나리오
+교과·학년: 중1 과학 (기체의 성질 - 온도에 따른 기체의 부피 변화 / 샤를 법칙)
+전수업: p.136~139 (보일 법칙)
+본수업: p.140~143
+수업시간: 45분
+수업 조건: 시범 실험(찌그러진 탁구공) + 입자 충돌 웹 시뮬레이션 활용 가능
+중요하게 볼 점: 공식을 먼저 외우게 하지 말고 왜 온도가 오르면 피스톤이 밀려 올라가는지 입자 운동·충돌 모형으로 학생이 스스로 설명하게 하고 싶어.</pre>
+          </div>
+          <p>제안된 블록을 보고 원하는 대로 조립한 뒤 승인합니다:</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">도입은 A-1, 모형화는 B-2(입자 충돌 시뮬레이션), 탐구는 A-3, 마무리는 C-4로 합쳐줘.
+모형화 단계에서 '입자 크기가 커진다'는 오개념을 짚는 발문을 추가하고, 이 아웃라인으로 확정해서 시나리오 초안 만들어줘.
+/시나리오-아웃라인-확정</pre>
+          </div>
+          <p>초안 검토·부분 수정이 끝나면 <code>/시나리오-확정</code>으로 기준본을 고정합니다.</p>
+        </article>
+
+        <article>
+          <h3>Step 2. 스튜디오 프리젠테이션 3종 패키지 생성 (<code>/프리젠테이션</code>)</h3>
+          <p>확정된 시나리오를 바탕으로 슬라이드 아웃라인 A/B/C를 비교하고 확정하면, 스튜디오에 바로 넣을 수 있는 <b>3종 패키지</b>가 출력됩니다.</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">/프리젠테이션
+확정된 시나리오를 기준으로 12장 내외의 스튜디오 프리젠테이션 아웃라인 A/B/C를 제안해줘.</pre>
+          </div>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">A안(거시 현상 vs 미시 입자 모형 1:1 대비형)으로 확정하고 스튜디오 직결 3종 패키지 출력해줘.
+/프리젠테이션-아웃라인-확정</pre>
+          </div>
+        </article>
+
+        <article>
+          <h3>Step 3. 마무리 학습지 및 서술형 채점 기준표 생성 (<code>/학습지</code>)</h3>
+          <p>시나리오·프리젠테이션과 동일한 흐름으로 <b>[A. 개념 빈칸 + 미니 모형 스케치 / B. 객관식 2 + 서술형 1 / C. 과학적 생각의 변화 / 교사용 AI 서술형 채점 루브릭]</b>을 생성합니다.</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">/학습지
+확정된 시나리오와 프리젠테이션 기준으로 마무리 학습지 아웃라인 보여줘.</pre>
+          </div>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">A안으로 확정하고 학습지 초안 만들어줘. 파트 A에 가열 전/후 기체 입자 화살표를 직접 그리는 미니 모형 체크 칸을 넣어줘.
+/학습지-아웃라인-확정</pre>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="studio-secret">
+      <div class="eyebrow">스튜디오 200% 활용 비결</div>
+      <h2>스튜디오(Slide Deck) 생성 및 부분 편집 4단계 실전 매뉴얼</h2>
+      <div class="cards two">
+        <article>
+          <span class="tag green">비결 1 · 노트→소스 고정</span>
+          <h3>확정 설계서(패키지 1)를 소스로 변환</h3>
+          <p>채팅이 출력한 <b>[패키지 1: 슬라이드 상세 설계서]</b>를 메모(Note)로 저장한 뒤 <b>‘소스로 변환(Convert to source)’</b>을 클릭하세요.</p>
+        </article>
+        <article>
+          <span class="tag warn">비결 2 · 소스 체크박스 황금 법칙</span>
+          <h3>스튜디오 실행 전 ‘운영지침’ 체크 해제!</h3>
+          <p>우측 스튜디오에서 Slide Deck을 누르기 직전에는 좌측 소스에서 <b>운영지침(00_최우선지침) 체크는 잠시 끄고, [변환한 슬라이드 설계서 소스]와 [교과서 소스]만 체크</b>하세요. (운영지침 문구가 슬라이드에 섞이는 것을 완벽 차단합니다!)</p>
+        </article>
+        <article>
+          <span class="tag green">비결 3 · 자가 완결형 Revise</span>
+          <h3>스튜디오 수정(<code>Revise</code>) 시 소스 미참조 극복</h3>
+          <p>스튜디오의 <code>Revise</code> 모드는 원본 소스를 다시 읽지 않습니다. 특정 슬라이드를 고칠 때는 채팅(운영지침 다시 체크!)에서 아래처럼 요청해 <b>자가 완결형 Revise 지시문</b>을 받아 붙여 넣으세요.</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">/프리젠테이션-부분수정
+4번 슬라이드의 가열 후 입자 화살표 길이를 가열 전보다 2배 길게 강조하고, 6번 슬라이드 본문 문구를 20자 이내로 더 쉽게 고치는 스튜디오 Revise 지시문을 작성해줘.</pre>
+          </div>
+        </article>
+        <article>
+          <span class="tag">비결 4 · 3.6 Flash 부분 패치</span>
+          <h3>실시간 타이핑용 슬라이드만 Google Slides로 패치</h3>
+          <p>수업 중 학급별 실험 측정값을 직접 타이핑해야 하는 표 슬라이드 등 1~2장은 <code>/슬라이드-플래시패치</code>로 교육 계정 Gemini(3.6 Flash) 프롬프트를 뽑아 편집형 슬라이드로 끼워 넣으세요.</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">/슬라이드-플래시패치
+8번 슬라이드(모둠별 실험 측정값 비교표)만 수업 중 직접 타이핑할 수 있게 Google Slides(3.6 Flash) 변환 프롬프트로 만들어줘.</pre>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="accumulation">
+      <div class="eyebrow">자가 진화 시스템</div>
+      <h2>수업할수록 내 성향이 누적되어 지침이 진화합니다</h2>
+      <p>매 수업에서 선택하고 수정한 이유를 AI가 <b>3계층(① 이번 수업만 / ② 관찰된 장기 성향 후보 / ③ 승인된 영구 원칙)</b>으로 분류해 장부에 기록합니다. 산출물 확정 때마다 1줄로 가볍게 누적 여부를 확인하며, 두 가지 방식으로 지침을 업그레이드할 수 있습니다.</p>
+
+      <div class="cards two">
+        <article>
+          <span class="tag green">방법 A · 10초 빠른 누적</span>
+          <h3><code>/성향스냅샷</code> (모듈형 프로필 패치)</h3>
+          <p>긴 지침 전문을 다시 만들 필요 없이, 지금까지 누적된 내 성향만 <code>2-C. 교사 성향 누적 프로필</code> 블록 형태로 뽑아냅니다. Google Docs로 연결한 지침 문서의 2-C 섹션에 덮어쓰고 동기화만 누르면 끝납니다.</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">/성향스냅샷
+지금까지 승인하거나 관찰된 내 과학 수업 성향을 2-C 프로필 패치 블록으로 출력해줘.</pre>
+          </div>
+        </article>
+        <article>
+          <span class="tag">방법 B · 정식 버전업 전문 생성</span>
+          <h3><code>/지침개선</code> → <code>/지침개선-확정</code></h3>
+          <p>누적된 피드백 장부를 분석해 개정안을 먼저 검토(<code>/지침개선</code>)하고, 승인하면 14대 핵심 기능 계승 검증을 거친 <b>중략·생략 없는 차기 버전(v3.1, v3.2...) 최우선지침 전문</b>을 출력합니다.</p>
+          <div class="codebox">
+            <button class="copy" type="button">복사</button>
+            <pre tabindex="0">/지침개선
+
+[개정안 표 확인 후]
+제안 1, 2는 전체 과학 수업에 승인하고 제안 3은 물리 영역에만 반영해줘.
+/지침개선-확정</pre>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section id="commands">
+      <div class="eyebrow">빠른 찾기</div>
+      <h2>v3.0 명령어 사전</h2>
+      <label class="searchlabel" for="commandSearch">명령어 또는 기능 검색</label>
+      <input type="search" id="commandSearch" placeholder="예: 스튜디오, 패치, 성향, 시나리오, 확정, 학습지" autocomplete="off">
+      <div class="tablewrap">
+        <table id="commandTable">
+          <thead>
+            <tr>
+              <th>명령어</th>
+              <th>단계</th>
+              <th>핵심 동작</th>
+              <th>복사</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><code>/지침확인</code></td><td>시작 점검</td><td>현행 지침 버전, 중학 과학 5단계 인지 흐름, 누적 성향 프로필 확인</td><td><button class="mini" data-copy="/지침확인">복사</button></td></tr>
+            <tr><td><code>/시나리오</code></td><td>1. 시나리오</td><td>교과서 근거 분석 후 A/B/C 비교표 + 구간별 블록 조립표 제시</td><td><button class="mini" data-copy="/시나리오">복사</button></td></tr>
+            <tr><td><code>/시나리오-아웃라인-수정</code></td><td>아웃라인 조립</td><td>교사가 선택한 블록 조합·수정 사항을 단일 교사 구성 아웃라인으로 통합</td><td><button class="mini" data-copy="/시나리오-아웃라인-수정">복사</button></td></tr>
+            <tr><td><code>/시나리오-아웃라인-확정</code></td><td>시나리오 초안</td><td>승인된 아웃라인으로 분 단위 과학 수업 시나리오 초안(v0.1) 생성</td><td><button class="mini" data-copy="/시나리오-아웃라인-확정">복사</button></td></tr>
+            <tr><td><code>/시나리오-수정</code></td><td>시나리오 수정</td><td>지정 구간의 발문·실험·시간·오개념 대응 부분 수정</td><td><button class="mini" data-copy="/시나리오-수정">복사</button></td></tr>
+            <tr><td><code>/시나리오-확정</code></td><td>기준본 승인</td><td>현재 시나리오를 후속 자료의 기준본으로 확정 + 관찰 성향 1줄 확인</td><td><button class="mini" data-copy="/시나리오-확정">복사</button></td></tr>
+            <tr><td><code>/프리젠테이션</code></td><td>2. 슬라이드</td><td>확정 시나리오 기준 스튜디오 최적화 슬라이드 아웃라인 A/B/C 탐색</td><td><button class="mini" data-copy="/프리젠테이션">복사</button></td></tr>
+            <tr><td><code>/프리젠테이션-아웃라인-확정</code></td><td>스튜디오 패키지</td><td>[패키지1: 노트→소스 설계서] + [패키지2: 스튜디오 마스터 프롬프트] + [패키지3: 부분편집 가이드] 생성</td><td><button class="mini" data-copy="/프리젠테이션-아웃라인-확정">복사</button></td></tr>
+            <tr><td><code>/프리젠테이션-부분수정</code></td><td>스튜디오 Revise</td><td>원본 소스를 다시 읽지 않는 스튜디오 Revise 모드용 ‘자가 완결형 슬라이드별 수정 지시문’ 생성</td><td><button class="mini" data-copy="/프리젠테이션-부분수정">복사</button></td></tr>
+            <tr><td><code>/슬라이드-플래시패치</code></td><td>3.6 Flash 패치</td><td>실시간 타이핑·표 입력이 필요한 특정 슬라이드를 Google Slides(3.6 Flash)로 만드는 변환 프롬프트</td><td><button class="mini" data-copy="/슬라이드-플래시패치">복사</button></td></tr>
+            <tr><td><code>/프리젠테이션-확정</code></td><td>기준본 승인</td><td>현재 프리젠테이션 설계안 확정 및 학습지 연동 포인트 정리</td><td><button class="mini" data-copy="/프리젠테이션-확정">복사</button></td></tr>
+            <tr><td><code>/학습지</code></td><td>3. 학습지</td><td>확정 시나리오·슬라이드 기준 마무리 학습지 아웃라인 탐색</td><td><button class="mini" data-copy="/학습지">복사</button></td></tr>
+            <tr><td><code>/학습지-아웃라인-확정</code></td><td>학습지 초안</td><td>[학생용: 빈칸+모형체크/적용문제/생각의 변화] + [교사용: 정답·AI 서술형 채점 기준표] 생성</td><td><button class="mini" data-copy="/학습지-아웃라인-확정">복사</button></td></tr>
+            <tr><td><code>/학습지-수정</code></td><td>학습지 수정</td><td>빈칸 수, 문항 난이도, 제시어 조건, 서술형 채점 루브릭 수정</td><td><button class="mini" data-copy="/학습지-수정">복사</button></td></tr>
+            <tr><td><code>/학습지-확정</code></td><td>기준본 승인</td><td>마무리 학습지 최종 확정 + 수업 전체 관찰 성향 1줄 확인</td><td><button class="mini" data-copy="/학습지-확정">복사</button></td></tr>
+            <tr><td><code>/피드백기록</code></td><td>성향 장부</td><td>이번 수업 조건(Tier 1)과 장기 성향 후보(Tier 2) 누적 장부 조회</td><td><button class="mini" data-copy="/피드백기록">복사</button></td></tr>
+            <tr><td><code>/성향스냅샷</code></td><td>빠른 누적</td><td>지침 전체 교체 없이 2-C 섹션에 바로 붙여넣을 수 있는 [교사 성향 누적 패치 블록] 출력</td><td><button class="mini" data-copy="/성향스냅샷">복사</button></td></tr>
+            <tr><td><code>/지침개선</code></td><td>개정 검토</td><td>누적된 피드백·성향 기반 지침 개정안 검토표 제시 및 승인 대기</td><td><button class="mini" data-copy="/지침개선">복사</button></td></tr>
+            <tr><td><code>/지침개선-확정</code></td><td>차기 지침 전문</td><td>승인된 개정안을 반영한 생략 없는 차기 버전(v3.1) 최우선지침 전문 출력</td><td><button class="mini" data-copy="/지침개선-확정">복사</button></td></tr>
+            <tr><td><code>/이전수업-복습요소</code></td><td>연속 차시</td><td>전수업 핵심어와 본수업 ‘왜 필요한가’ 도입을 잇는 브릿지 발문 추출</td><td><button class="mini" data-copy="/이전수업-복습요소">복사</button></td></tr>
+            <tr><td><code>/상태</code></td><td>복구 요약</td><td>현재 단원·쪽수, 산출물 버전·승인 상태, 누적 성향 후보 요약</td><td><button class="mini" data-copy="/상태">복사</button></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p id="empty" hidden>일치하는 명령어가 없습니다.</p>
+    </section>
+
+    <section id="checklist">
+      <div class="eyebrow">실행 전·후 점검</div>
+      <h2>교사용 체크리스트</h2>
+      <div class="checks">
+        <label><input type="checkbox"> <b>[초기 설정]</b> 소스에 교과서·지도서와 <code>00_최우선지침_중학교과학_v3.0</code> 하나만 활성화했고, 채팅 Custom에 고정 운영 명령을 넣었다.</label>
+        <label><input type="checkbox"> <b>[시나리오]</b> A/B/C 비교표와 블록 조립표에서 내 수업 흐름(필요성 → 현실 → 단순 모형 → 탐구 → 현실 복귀)에 맞게 아웃라인을 승인했다.</label>
+        <label><input type="checkbox"> <b>[스튜디오 생성 전]</b> 채팅이 출력한 <code>[패키지 1: 슬라이드 상세 설계서]</code>를 메모에 저장한 뒤 <b>‘소스로 변환’</b>했다.</label>
+        <label><input type="checkbox"> <b>[스튜디오 생성 직전]</b> 좌측 소스에서 <b>운영지침 문서 체크는 잠시 해제</b>하고, [변환한 슬라이드 설계서 소스]와 [교과서 소스]만 체크한 뒤 스튜디오 Slide Deck에 <code>[패키지 2: 마스터 프롬프트]</code>를 넣었다.</label>
+        <label><input type="checkbox"> <b>[부분 편집]</b> 스튜디오 슬라이드 수정 시에는 채팅(운영지침 다시 체크!)에서 <code>/프리젠테이션-부분수정</code>으로 자가 완결형 <code>Revise</code> 지시문을 받아 넣었고, 실시간 타이핑 표는 <code>/슬라이드-플래시패치</code>를 활용했다.</label>
+        <label><input type="checkbox"> <b>[학습지 &amp; 성향 누적]</b> 마무리 학습지의 미니 모형 체크·생각의 변화 문항을 확인했고, 수업 설계 후 <code>/성향스냅샷</code> 또는 <code>/지침개선-확정</code>으로 내 성향을 누적했다.</label>
+      </div>
+    </section>
+  </main>
+</div>
+
+<footer>
+  <p>중학교 과학 AI 수업설계 스튜디오 통합 가이드 · v3.0 (2026.11) · Gemini Notebook 스튜디오 &amp; 3.6 Flash 하이브리드 에디션</p>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+<script>
+const toast = document.getElementById('toast');
+let toastTimer;
+function notify(msg){
+  toast.textContent = msg;
+  toast.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toast.hidden = true, 2400);
+}
+
+async function copyText(text){
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      const el = document.createElement('textarea');
+      el.value = text;
+      el.style.position = 'fixed';
+      el.style.opacity = '0';
+      document.body.appendChild(el);
+      el.select();
+      const ok = document.execCommand('copy');
+      el.remove();
+      if (!ok) throw Error('copy');
+    }
+    notify('클립보드에 복사했습니다.');
+  } catch(e) {
+    notify('자동 복사가 제한되었습니다. 텍스트를 직접 선택해 복사하세요.');
+  }
+}
+
+document.querySelectorAll('.copy').forEach(btn =>
+  btn.addEventListener('click', () => copyText(btn.parentElement.querySelector('pre').textContent))
+);
+document.querySelectorAll('[data-copy]').forEach(btn =>
+  btn.addEventListener('click', () => copyText(btn.dataset.copy))
+);
+
+document.getElementById('commandSearch').addEventListener('input', e => {
+  const q = e.target.value.trim().toLowerCase();
+  let count = 0;
+  document.querySelectorAll('#commandTable tbody tr').forEach(row => {
+    const show = row.textContent.toLowerCase().includes(q);
+    row.hidden = !show;
+    if (show) count++;
+  });
+  document.getElementById('empty').hidden = count > 0;
+});
+
+document.getElementById('printBtn').addEventListener('click', () => window.print());
+</script>
+</body>
+</html>
